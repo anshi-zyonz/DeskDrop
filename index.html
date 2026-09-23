@@ -1,0 +1,740 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="theme-color" content="#0F0C29">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="description" content="DeskDrop — Swift-grade dark glassmorphism P2P chat, chunked file drops, and cloud AI avatars over WebRTC.">
+  <title>DeskDrop</title>
+
+  <!-- PWA Manifest and Icons -->
+  <link rel="manifest" href="manifest.json">
+  <link rel="icon" type="image/png" href="icons/favicon.png">
+  <link rel="apple-touch-icon" href="icons/icon_128x128.png">
+
+  <!-- Stylesheet -->
+  <link rel="stylesheet" href="styles.css">
+
+  <!-- Local Self-Contained PeerJS (Works 100% Offline) -->
+  <script src="peerjs.min.js"></script>
+</head>
+<body>
+  <!-- Ambient background glow elements -->
+  <div class="ambient-glow one"></div>
+  <div class="ambient-glow two"></div>
+
+  <!-- Global Full-UI Glassmorphic Wallpaper Layers (Affects Entire Window & Sidebar) -->
+  <div class="global-wallpaper-layer" id="globalWallpaperLayer"></div>
+  <div class="global-wallpaper-overlay" id="globalWallpaperOverlay"></div>
+
+  <!-- Full Viewport Edge-to-Edge App Shell -->
+  <div class="app-container" id="appContainer">
+    <!-- Window Titlebar (Logo only, no icon, smaller and crisp) -->
+    <header class="app-titlebar">
+      <div class="titlebar-brand-area">
+        <img src="icons/DeskDrop_Text Logo.png" alt="DeskDrop" class="titlebar-logo-img">
+      </div>
+
+      <div class="titlebar-actions">
+        <button class="btn-notification-prompt" id="btnEnableNotifications" style="display: none;">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path><path d="M13.73 21a2 2 0 0 1-3.46 0"></path></svg>
+          <span>Enable Notifications</span>
+        </button>
+      </div>
+    </header>
+
+    <!-- Main Body SplitView -->
+    <div class="app-body">
+      <!-- Left Sidebar (Translucent dark glass over wallpaper) -->
+      <aside class="sidebar" id="sidebar">
+        <!-- Profile Details Section -->
+        <div class="sidebar-profile-card">
+          <div class="profile-card-click-area" id="profileCardClickArea" title="Open Settings & Profile">
+            <div class="avatar-wrapper">
+              <img src="" alt="Avatar" class="avatar-img" id="myAvatarImg" style="display: none;">
+              <div class="avatar-placeholder" id="myAvatarPlaceholder">ME</div>
+            </div>
+            <div class="profile-info">
+              <span class="profile-name" id="myUsernameDisplay">Mac User</span>
+              <span class="profile-status-text">● Online</span>
+            </div>
+          </div>
+
+          <button class="btn-sidebar-plus" id="btnOpenGroupModal" title="Create or Join Group">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+          </button>
+        </div>
+
+        <!-- Sidebar Navigation Sections (Groups & 1-on-1 Direct Messages) -->
+        <div class="sidebar-scroll-area">
+          <!-- Workspaces & Groups -->
+          <div class="sidebar-section">
+            <div class="sidebar-section-header">
+              <span>Workspaces &amp; Groups</span>
+              <span id="groupsCountBadge" style="font-size: 10px; color: var(--accent-teal);">1 active</span>
+            </div>
+            <div id="groupsListContainer" style="display: flex; flex-direction: column; gap: 4px;"></div>
+          </div>
+
+          <!-- Direct Messages (1-on-1) -->
+          <div class="sidebar-section">
+            <div class="sidebar-section-header">
+              <span>Direct Messages</span>
+              <span id="peersCountBadge" style="font-size: 10px; color: var(--accent-teal);">0 active</span>
+            </div>
+            <div id="peersListContainer" style="display: flex; flex-direction: column; gap: 4px;">
+              <div class="empty-state-notice" id="emptyPeersNotice">
+                No teammates nearby in this room yet.<br>Click your profile to invite friends!
+              </div>
+            </div>
+          </div>
+        </div>
+      </aside>
+
+      <!-- Main Chat Area -->
+      <main class="main-chat" id="mainChatArea">
+        <!-- Chat Header (Clickable for WhatsApp-style Group Info menu) -->
+        <header class="chat-header">
+          <div class="chat-header-info clickable-header" id="chatHeaderClickArea" title="Click for details & wallpaper">
+            <div class="header-chat-icon" id="headerChatIcon">#</div>
+            <div class="header-text-col">
+              <div class="header-chat-title">
+                <span id="chatTitle">Main Workspace</span>
+                <span class="header-type-pill" id="chatTypePill" style="background: rgba(108, 99, 255, 0.2); color: var(--accent-indigo);">Group</span>
+                <span class="header-info-chevron" id="headerInfoChevron">›</span>
+              </div>
+              <div class="header-chat-sub" id="chatSubtitle">Click to view members &amp; group wallpaper</div>
+            </div>
+          </div>
+        </header>
+
+        <!-- Drag & Drop Zone Overlay -->
+        <div class="drop-overlay" id="dropOverlay">
+          <div class="drop-icon-box">
+            <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="#FFF" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
+          </div>
+          <div class="drop-text-primary">Drag to DeskDrop</div>
+        </div>
+
+        <!-- Chat Feed Scroll Container -->
+        <div class="chat-feed" id="chatFeed">
+          <div class="feed-welcome" id="feedWelcome">
+            <div class="welcome-icon-box">
+              <img src="icons/icon_128x128.png" alt="DeskDrop">
+            </div>
+            <h2 class="welcome-title">Welcome to DeskDrop</h2>
+            <p class="welcome-desc">
+              Swift-grade peer-to-peer chat and chunked 64KB file drop. Works 100% offline on local Wi-Fi or across the internet with zero intermediate cloud servers.
+            </p>
+          </div>
+        </div>
+
+        <!-- Emojis & Animated Stickers Drawer Popover -->
+        <div class="drawer-popover" id="emojiDrawer">
+          <div class="drawer-header">
+            <div class="drawer-tabs">
+              <button class="drawer-tab-btn active" id="tabEmojiFluent">✨ Microsoft Fluent</button>
+              <button class="drawer-tab-btn" id="tabEmojiStandard">Emojis</button>
+              <button class="drawer-tab-btn" id="tabEmojiAi">✦ AI Stickers</button>
+            </div>
+            <button class="drawer-close-btn" id="btnCloseEmojiDrawer">✕</button>
+          </div>
+
+          <!-- Microsoft Animated Fluent 3D Emojis Tab (100% Offline Local Assets) -->
+          <div class="drawer-content-pane" id="emojiTabFluentContent">
+            <div class="drawer-scrollable" style="padding: 12px;">
+              <div class="fluent-emoji-grid" id="fluentEmojiGrid"></div>
+            </div>
+          </div>
+
+          <!-- Full System Unicode Emojis Tab with Categories & Search -->
+          <div class="drawer-content-pane" id="emojiTabStandardContent" style="display: none;">
+            <div class="drawer-search-bar">
+              <input type="text" id="inputEmojiSearch" class="drawer-search-input" placeholder="Search emojis (e.g. smile, fire, heart)...">
+            </div>
+            <div class="emoji-category-pills" id="emojiCategoryPills">
+              <button class="cat-pill active" data-cat="all">All</button>
+              <button class="cat-pill" data-cat="smileys">😀 Smileys</button>
+              <button class="cat-pill" data-cat="gestures">👋 People</button>
+              <button class="cat-pill" data-cat="animals">🐱 Animals</button>
+              <button class="cat-pill" data-cat="food">🍕 Food</button>
+              <button class="cat-pill" data-cat="activities">⚽️ Sports</button>
+              <button class="cat-pill" data-cat="objects">💡 Objects</button>
+              <button class="cat-pill" data-cat="symbols">❤️ Symbols</button>
+            </div>
+            <div class="drawer-scrollable">
+              <div class="emoji-grid" id="fullEmojiGrid"></div>
+            </div>
+          </div>
+
+          <!-- AI Emoji Sticker Generator Tab (Cloud Feature) -->
+          <div class="drawer-content-pane" id="emojiTabAiContent" style="display: none;">
+            <div class="drawer-scrollable" style="padding: 14px;">
+              <div class="ai-emoji-box">
+                <span style="font-size: 12px; color: var(--text-secondary);">Synthesize custom 3D emoji stickers powered by Cloud AI (requires internet):</span>
+                <div class="ai-emoji-input-row">
+                  <input type="text" id="inputAiEmojiPrompt" class="drawer-search-input" placeholder="e.g. fire skull with sunglasses, neon cat">
+                  <button class="btn-primary" id="btnGenerateAiEmoji" style="padding: 6px 12px; font-size: 11px;">✦ Create</button>
+                </div>
+                <div class="ai-emoji-result-preview" id="aiEmojiPreviewBox">
+                  <span style="font-size: 11px; color: var(--text-tertiary);">Generated emoji sticker will appear here</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Tenor & Giphy GIF Drawer Popover (Cloud Feature) -->
+        <div class="drawer-popover" id="gifDrawer">
+          <div class="drawer-header">
+            <span style="font-size: 13px; font-weight: 700; color: var(--accent-teal);">Trending &amp; Search GIFs</span>
+            <button class="drawer-close-btn" id="btnCloseGifDrawer">✕</button>
+          </div>
+          <div class="drawer-search-bar">
+            <input type="text" id="inputGifSearch" class="drawer-search-input" placeholder="Search millions of GIFs...">
+          </div>
+          <div class="drawer-scrollable" style="padding: 12px;">
+            <div class="gif-grid" id="gifGrid">
+              <div style="grid-column: 1 / -1; text-align: center; padding: 20px; font-size: 12px; color: var(--text-tertiary);">
+                Loading trending GIFs...
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Chat Input Bar with Perfectly Aligned GIF & Emoji Buttons with Colored Hover -->
+        <div class="chat-input-bar">
+          <input type="file" id="fileInput" multiple style="display: none;">
+          <button class="btn-input-attach" id="btnAttach" title="Attach file">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+          </button>
+
+          <div class="input-capsule">
+            <textarea id="chatInput" class="chat-textarea" rows="1" placeholder="Type a message or drag & drop files here..."></textarea>
+            
+            <div class="input-actions-cluster">
+              <button class="btn-inline-action pill-gif" id="btnToggleGif" title="Search GIFs">GIF</button>
+              <button class="btn-inline-action icon-emoji" id="btnToggleEmoji" title="Microsoft Animated Fluent Emojis">
+                <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><path d="M8 14s1.5 2 4 2 4-2 4-2"></path><line x1="9" y1="9" x2="9.01" y2="9"></line><line x1="15" y1="9" x2="15.01" y2="9"></line></svg>
+              </button>
+            </div>
+          </div>
+
+          <button class="btn-send" id="btnSend" title="Send message (Enter)">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
+          </button>
+        </div>
+      </main>
+    </div>
+  </div>
+
+  <!-- WhatsApp-Style Group Info & Custom Group Wallpaper Modal -->
+  <div class="modal-backdrop" id="groupInfoModal">
+    <div class="profile-settings-sheet" style="width: min(460px, 94vw);">
+      <div class="sheet-user-header">
+        <div class="sheet-avatar-col">
+          <div class="sheet-avatar-wrapper" id="groupInfoIconBox" style="background: var(--accent-indigo);">
+            <span style="font-size: 26px; font-weight: 800; color: #FFF;" id="groupInfoIconLetter">#</span>
+          </div>
+        </div>
+
+        <div class="sheet-user-info">
+          <div class="sheet-user-name" id="groupInfoTitle">Main Workspace</div>
+          <div class="sheet-user-handle" id="groupInfoSub">Group Channel • 3 members</div>
+        </div>
+
+        <button class="sheet-close-btn" id="btnCloseGroupInfoModal">✕</button>
+      </div>
+
+      <div class="sheet-divider"></div>
+
+      <div class="sheet-menu-container">
+        <!-- Members List Card -->
+        <div class="sheet-menu-item expanded">
+          <div class="sheet-item-header" style="cursor: default;">
+            <div class="sheet-item-icon" style="background: rgba(78, 205, 196, 0.2); color: var(--accent-teal);">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg>
+            </div>
+            <div class="sheet-item-text">
+              <div class="sheet-item-title">Active Members in Group</div>
+              <div class="sheet-item-sub" id="groupInfoMembersCount">Connected teammates</div>
+            </div>
+          </div>
+
+          <div class="sheet-expandable-content" style="display: block;">
+            <div id="groupMembersList" style="display: flex; flex-direction: column; gap: 6px; max-height: 140px; overflow-y: auto;"></div>
+          </div>
+        </div>
+
+        <!-- Custom Wallpaper for this Group -->
+        <div class="sheet-menu-item expanded">
+          <div class="sheet-item-header" style="cursor: default;">
+            <div class="sheet-item-icon" style="background: rgba(108, 99, 255, 0.2); color: var(--accent-indigo);">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><circle cx="8.5" cy="8.5" r="1.5"></circle><polyline points="21 15 16 10 5 21"></polyline></svg>
+            </div>
+            <div class="sheet-item-text">
+              <div class="sheet-item-title">Custom Wallpaper for this Group</div>
+              <div class="sheet-item-sub" id="groupWallpaperStatusText">Set a distinct theme background only for this group</div>
+            </div>
+          </div>
+
+          <div class="sheet-expandable-content" style="display: block;">
+            <input type="file" id="groupWallpaperFileInput" accept="image/*" style="display: none;">
+            <div style="display: flex; gap: 8px;">
+              <button class="btn-primary" id="btnChooseGroupWallpaper" style="flex: 1; font-size: 12px;">Set Group Wallpaper</button>
+              <button class="btn-secondary" id="btnResetGroupWallpaper" style="flex: 1; font-size: 12px;">Use Default</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Profile & Settings Modal (Designed after Reference Image: Glassmorphic Menu Card) -->
+  <div class="modal-backdrop" id="profileModal">
+    <div class="profile-settings-sheet">
+      <!-- User Header Banner -->
+      <div class="sheet-user-header">
+        <div class="sheet-avatar-col">
+          <div class="sheet-avatar-wrapper">
+            <img src="" alt="Avatar" class="sheet-avatar-img" id="sheetAvatarImg" style="display: none;">
+            <div class="sheet-avatar-placeholder" id="sheetAvatarPlaceholder">ME</div>
+          </div>
+          <button class="sheet-avatar-edit-pill" id="btnSheetChangeAvatar">Edit Photo</button>
+        </div>
+
+        <div class="sheet-user-info">
+          <div class="sheet-user-name" id="sheetUsernameDisplay">Mac User</div>
+          <div class="sheet-user-handle" id="sheetUserHandle">@macuser • Online</div>
+        </div>
+
+        <button class="sheet-close-btn" id="btnCloseProfileModal">✕</button>
+      </div>
+
+      <div class="sheet-divider"></div>
+
+      <!-- Settings Menu Items (Stacked rounded cards) -->
+      <div class="sheet-menu-container">
+        <!-- Item 1: Display Name -->
+        <div class="sheet-menu-item" id="itemEditName">
+          <div class="sheet-item-header">
+            <div class="sheet-item-icon" style="background: rgba(108, 99, 255, 0.2); color: var(--accent-indigo);">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>
+            </div>
+            <div class="sheet-item-text">
+              <div class="sheet-item-title">Display Name</div>
+              <div class="sheet-item-sub" id="sheetItemCurrentName">Change your chat username</div>
+            </div>
+            <div class="sheet-item-chevron">›</div>
+          </div>
+
+          <div class="sheet-expandable-content" id="expandNameBox" style="display: none;">
+            <div style="display: flex; gap: 8px; margin-top: 8px;">
+              <input type="text" id="settingsUsernameInput" class="settings-input" style="flex: 1;" maxlength="24">
+              <button class="btn-primary" id="btnSaveUsername">Save</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Item 2: Avatar & AI Synthesis -->
+        <div class="sheet-menu-item" id="itemAvatarActions">
+          <div class="sheet-item-header">
+            <div class="sheet-item-icon" style="background: rgba(78, 205, 196, 0.2); color: var(--accent-teal);">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m12 3-1.9 5.8a2 2 0 0 1-1.3 1.3L3 12l5.8 1.9a2 2 0 0 1 1.3 1.3L12 21l1.9-5.8a2 2 0 0 1 1.3-1.3L21 12l-5.8-1.9a2 2 0 0 1-1.3-1.3L12 3z"/></svg>
+            </div>
+            <div class="sheet-item-text">
+              <div class="sheet-item-title">Profile Avatar</div>
+              <div class="sheet-item-sub">Synthesize with AI or upload custom photo</div>
+            </div>
+            <div class="sheet-item-chevron">›</div>
+          </div>
+
+          <div class="sheet-expandable-content" id="expandAvatarBox" style="display: none;">
+            <div style="display: flex; gap: 8px; margin-top: 8px;">
+              <input type="file" id="customAvatarFileInput" accept="image/*" style="display: none;">
+              <button class="btn-secondary" id="btnUploadCustomAvatar" style="flex: 1;">Upload Photo</button>
+              <button class="btn-primary" id="btnOpenAiAvatarFromSettings" style="flex: 1;">✦ Cloud AI</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Item 3: Full UI Chat Wallpaper & Glass Blur -->
+        <div class="sheet-menu-item" id="itemWallpaperActions">
+          <div class="sheet-item-header">
+            <div class="sheet-item-icon" style="background: rgba(255, 107, 107, 0.2); color: var(--accent-coral);">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><circle cx="8.5" cy="8.5" r="1.5"></circle><polyline points="21 15 16 10 5 21"></polyline></svg>
+            </div>
+            <div class="sheet-item-text">
+              <div class="sheet-item-title">App Wallpaper &amp; Glass Blur</div>
+              <div class="sheet-item-sub">Applies across the entire UI and sidebar</div>
+            </div>
+            <div class="sheet-item-chevron">›</div>
+          </div>
+
+          <div class="sheet-expandable-content" id="expandWallpaperBox" style="display: none;">
+            <input type="file" id="wallpaperFileInput" accept="image/*" style="display: none;">
+            <div style="display: flex; gap: 8px; margin-top: 8px;">
+              <button class="btn-primary" id="btnChooseWallpaper" style="flex: 1; font-size: 12px;">Upload Photo</button>
+              <button class="btn-secondary" id="btnResetWallpaper" style="flex: 1; font-size: 12px;">Reset</button>
+            </div>
+
+            <!-- Sliders for Lightness / Darkness and Blur -->
+            <div class="slider-group" style="margin-top: 10px;">
+              <div class="slider-row">
+                <div class="settings-label">
+                  <span>Theme Lightness / Darkness</span>
+                  <span id="labelOpacityVal" style="color: var(--accent-teal);">78% Dark</span>
+                </div>
+                <div style="display: flex; align-items: center; justify-content: space-between; font-size: 10px; color: var(--text-tertiary);">
+                  <span>Light (30%)</span>
+                  <span>Dark (95%)</span>
+                </div>
+                <input type="range" id="sliderWallpaperOpacity" class="slider-input" min="0.30" max="0.95" step="0.01" value="0.78">
+              </div>
+
+              <div class="slider-row">
+                <div class="settings-label">
+                  <span>Glass Blur Intensity</span>
+                  <span id="labelBlurVal" style="color: var(--accent-teal);">24px</span>
+                </div>
+                <div style="display: flex; align-items: center; justify-content: space-between; font-size: 10px; color: var(--text-tertiary);">
+                  <span>Crisp (0px)</span>
+                  <span>Heavy Blur (50px)</span>
+                </div>
+                <input type="range" id="sliderWallpaperBlur" class="slider-input" min="0" max="50" step="1" value="24">
+              </div>
+
+              <!-- Live Wallpaper Preview Box -->
+              <div class="wallpaper-preview-box" id="wallpaperPreviewBox">
+                <div class="wallpaper-preview-img" id="wallpaperPreviewImg"></div>
+                <div class="wallpaper-preview-tint" id="wallpaperPreviewTint"></div>
+                <span class="wallpaper-preview-text">Live Wallpaper Preview</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Item 4: Workspace Room Code -->
+        <div class="sheet-menu-item" id="itemRoomActions">
+          <div class="sheet-item-header">
+            <div class="sheet-item-icon" style="background: rgba(255, 230, 109, 0.2); color: var(--accent-amber);">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path></svg>
+            </div>
+            <div class="sheet-item-text">
+              <div class="sheet-item-title">Workspace Room Code</div>
+              <div class="sheet-item-sub" id="sheetRoomCodeSub">Code: BWZ-98</div>
+            </div>
+            <div class="sheet-item-chevron">›</div>
+          </div>
+
+          <div class="sheet-expandable-content" id="expandRoomBox" style="display: none;">
+            <div style="display: flex; gap: 8px; margin-top: 8px;">
+              <button class="btn-secondary" id="btnSettingsCopyRoom" style="flex: 1; font-size: 12px;">Copy Room Link</button>
+              <button class="btn-secondary" id="btnSettingsNewRoom" style="flex: 1; font-size: 12px;">New Room Code</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Item 5: About DeskDrop & Creator Details -->
+        <div class="sheet-menu-item" id="itemCreatorInfo">
+          <div class="sheet-item-header">
+            <div class="sheet-item-icon" style="background: rgba(108, 99, 255, 0.2); color: var(--accent-indigo);">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>
+            </div>
+            <div class="sheet-item-text">
+              <div class="sheet-item-title">About DeskDrop</div>
+              <div class="sheet-item-sub">Creator &amp; Social Links</div>
+            </div>
+            <div class="sheet-item-chevron">›</div>
+          </div>
+
+          <div class="sheet-expandable-content" id="expandCreatorBox" style="display: none;">
+            <div class="creator-card">
+              <div class="creator-badge-row">
+                <span class="creator-app-badge">DeskDrop WebOs v3.0</span>
+                <span class="creator-p2p-badge">⚡️ 100% P2P</span>
+              </div>
+              <p class="creator-description">
+                Crafted with pure WebRTC DataChannels, dual-mesh offline sync, and dark Swift glassmorphism.
+              </p>
+              
+              <div class="creator-links-list">
+                <!-- GitHub Link -->
+                <a href="https://github.com/anshi-zyonz" target="_blank" rel="noopener noreferrer" class="creator-link-pill github-pill" id="linkCreatorGithub">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0 0 24 12c0-6.63-5.37-12-12-12z"/></svg>
+                  <span class="creator-link-text">GitHub: <b id="displayCreatorGithub">@anshi-zyonz</b></span>
+                  <span class="creator-link-arrow">↗</span>
+                </a>
+
+                <!-- Instagram Link -->
+                <a href="https://www.instagram.com/anshi_zyonz/" target="_blank" rel="noopener noreferrer" class="creator-link-pill instagram-pill" id="linkCreatorInstagram">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2.163c3.204 0 3.584.012 4.85.07 3.252.148 4.771 1.691 4.919 4.919.058 1.265.069 1.645.069 4.849 0 3.205-.012 3.584-.069 4.849-.149 3.225-1.664 4.771-4.919 4.919-1.266.058-1.644.07-4.85.07-3.204 0-3.584-.012-4.849-.07-3.26-.149-4.771-1.699-4.919-4.92-.058-1.265-.07-1.644-.07-4.849 0-3.204.013-3.583.07-4.849.149-3.227 1.664-4.771 4.919-4.919 1.266-.057 1.645-.069 4.849-.069zm0-2.163c-3.259 0-3.667.014-4.947.072-4.358.2-6.78 2.618-6.98 6.98-.059 1.281-.073 1.689-.073 4.948 0 3.259.014 3.668.072 4.948.2 4.358 2.618 6.78 6.98 6.98 1.281.058 1.689.072 4.948.072 3.259 0 3.668-.014 4.948-.072 4.354-.2 6.782-2.618 6.979-6.98.059-1.28.073-1.689.073-4.948 0-3.259-.014-3.667-.072-4.947-.196-4.354-2.617-6.78-6.979-6.98-1.281-.059-1.69-.073-4.949-.073zm0 5.838c-3.403 0-6.162 2.759-6.162 6.162s2.759 6.163 6.162 6.163 6.162-2.759 6.162-6.163c0-3.403-2.759-6.162-6.162-6.162zm0 10.162c-2.209 0-4-1.79-4-4 0-2.209 1.791-4 4-4s4 1.791 4 4c0 2.21-1.791 4-4 4zm6.406-11.845c-.796 0-1.441.645-1.441 1.44s.645 1.44 1.441 1.44c.795 0 1.439-.645 1.439-1.44s-.644-1.44-1.439-1.44z"/></svg>
+                  <span class="creator-link-text">Instagram: <b id="displayCreatorInstagram">@anshi_zyonz</b></span>
+                  <span class="creator-link-arrow">↗</span>
+                </a>
+              </div>
+
+              <!-- Quick Customize Handles Button -->
+              <div style="margin-top: 8px;">
+                <button class="btn-subtle-link" id="btnToggleEditSocials" style="font-size: 11px; color: var(--text-tertiary); cursor: pointer; background: none; border: none; padding: 0;">✎ Edit Social Handles</button>
+                <div id="boxEditSocials" style="display: none; margin-top: 8px; flex-direction: column; gap: 6px;">
+                  <input type="text" id="inputEditGithub" class="settings-input" placeholder="GitHub username (e.g. anshi-zyonz)" value="anshi-zyonz" style="font-size: 11px;">
+                  <input type="text" id="inputEditInstagram" class="settings-input" placeholder="Instagram username (e.g. anshi_zyonz)" value="anshi_zyonz" style="font-size: 11px;">
+                  <button class="btn-primary" id="btnSaveCreatorSocials" style="padding: 4px 10px; font-size: 11px; align-self: flex-end;">Save Handles</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Create or Join Group Modal -->
+  <div class="modal-backdrop" id="groupModal">
+    <div class="modal-card" style="width: min(500px, 92vw);">
+      <div class="modal-header">
+        <div class="modal-title-box">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg>
+          <span class="modal-title">Workspaces &amp; Groups</span>
+        </div>
+        <button class="btn-close-modal" id="btnCloseGroupModal">✕</button>
+      </div>
+
+      <div class="modal-body">
+        <div class="drawer-tabs" style="margin-bottom: 8px;">
+          <button class="drawer-tab-btn active" id="tabCreateGroup">Create Group</button>
+          <button class="drawer-tab-btn" id="tabJoinGroup">Join Group / Room</button>
+        </div>
+
+        <div id="createGroupTabContent" style="display: flex; flex-direction: column; gap: 14px;">
+          <div class="settings-row">
+            <label class="settings-label">Group Name</label>
+            <input type="text" id="inputNewGroupName" class="settings-input" placeholder="e.g. Design Team, Alpha Testers, Core Squad">
+          </div>
+
+          <div class="settings-row">
+            <label class="settings-label">Group Color Theme</label>
+            <div class="group-palette-swatches" id="groupColorSwatches"></div>
+          </div>
+
+          <button class="btn-primary" id="btnSubmitCreateGroup" style="margin-top: 6px;">Create Group</button>
+        </div>
+
+        <div id="joinGroupTabContent" style="display: none; flex-direction: column; gap: 14px;">
+          <div class="settings-row">
+            <label class="settings-label">Enter 6-Character Room / Group Code</label>
+            <input type="text" id="inputJoinGroupCode" class="settings-input" placeholder="e.g. BWZ-98" maxlength="12" style="font-family: var(--font-mono); text-transform: uppercase;">
+          </div>
+          <button class="btn-primary" id="btnSubmitJoinGroup" style="margin-top: 6px;">Join Room &amp; Connect</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- AI Avatar Generator Modal -->
+  <div class="modal-backdrop" id="avatarModal">
+    <div class="modal-card">
+      <div class="modal-header">
+        <div class="modal-title-box">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m12 3-1.9 5.8a2 2 0 0 1-1.3 1.3L3 12l5.8 1.9a2 2 0 0 1 1.3 1.3L12 21l1.9-5.8a2 2 0 0 1 1.3-1.3L21 12l-5.8-1.9a2 2 0 0 1-1.3-1.3L12 3z"/></svg>
+          <span class="modal-title">Cloud AI Avatar Generator</span>
+        </div>
+        <button class="btn-close-modal" id="btnCloseAvatarModal">✕</button>
+      </div>
+
+      <div class="modal-body">
+        <p style="font-size: 13px; color: var(--text-secondary); line-height: 1.45;">
+          Synthesize 3 unique cartoon avatars powered by Pollinations Cloud AI (requires internet). Pick your favorite or generate new variations!
+        </p>
+
+        <div class="settings-row">
+          <div style="display: flex; gap: 8px;">
+            <input type="text" id="avatarPromptInput" class="settings-input" style="flex: 1;" placeholder="e.g. 3D cute cyberpunk hacker cat, vibrant studio lighting">
+            <button class="btn-primary" id="btnGenerateAvatar">✦ Generate</button>
+          </div>
+
+          <div style="display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px;">
+            <button class="btn-secondary" style="padding: 4px 10px; font-size: 11px;" data-avatar-prompt="3D cute cyberpunk developer with glowing purple headphones, octane render">Cyberpunk Dev</button>
+            <button class="btn-secondary" style="padding: 4px 10px; font-size: 11px;" data-avatar-prompt="Pixar style friendly 3D cartoon avatar, soft volumetric lighting">Pixar 3D</button>
+            <button class="btn-secondary" style="padding: 4px 10px; font-size: 11px;" data-avatar-prompt="Anime retro synthwave coder avatar, colorful neon jacket">Retro Anime</button>
+            <button class="btn-secondary" style="padding: 4px 10px; font-size: 11px;" data-avatar-prompt="Futuristic astronaut cat with glass helmet and cosmic stars">Space Cat</button>
+            <button class="btn-secondary" style="padding: 4px 10px; font-size: 11px;" data-avatar-prompt="Minimalist cute pastel chibi programmer with laptop">Chibi Coder</button>
+          </div>
+        </div>
+
+        <div class="avatar-grid" id="avatarGrid">
+          <div style="grid-column: 1 / -1; text-align: center; padding: 24px; color: var(--text-tertiary); font-size: 13px;" id="avatarInitialState">
+            Click a preset or enter a prompt and click <strong>Generate</strong>!
+          </div>
+        </div>
+      </div>
+
+      <div class="modal-footer">
+        <button class="btn-secondary" id="btnCancelAvatar">Cancel</button>
+        <button class="btn-primary" id="btnApplyAvatar" disabled>Set Active Avatar</button>
+      </div>
+    </div>
+  <!-- First-Time User Onboarding Wizard Modal -->
+  <div class="modal-backdrop" id="onboardingModal" style="display: none; z-index: 500;">
+    <div class="onboarding-card">
+      <!-- Progress Bar Track -->
+      <div class="onboarding-progress-bar">
+        <div class="onboarding-progress-fill" id="onboardingProgressFill"></div>
+      </div>
+
+      <!-- Header with Logo and Step Badge -->
+      <div class="onboarding-top-bar">
+        <img src="icons/DeskDrop_Text Logo.png" alt="DeskDrop" class="onboarding-logo-img">
+        <span class="onboarding-step-badge" id="onboardingStepBadge">Step 1 of 5</span>
+      </div>
+
+      <!-- Step 1: User's Name -->
+      <div class="onboarding-step-content" id="onboardingStep1">
+        <div class="onboarding-icon-bubble">
+          <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>
+        </div>
+        <h2 class="onboarding-title">Welcome to DeskDrop</h2>
+        <p class="onboarding-desc">What should your teammates call you? Choose a display name or handle.</p>
+
+        <div class="onboarding-input-box">
+          <input type="text" id="onboardingNameInput" class="onboarding-input" placeholder="e.g. Alex, Anshi, Sam..." maxlength="24" autocomplete="off">
+        </div>
+
+        <div class="onboarding-footer">
+          <button class="btn-onboarding-skip" id="btnOnboardingSkip1">Skip</button>
+          <button class="btn-primary btn-onboarding-next" id="btnOnboardingNext1">Continue →</button>
+        </div>
+      </div>
+
+      <!-- Step 2: Profile Picture (Upload or AI Generate) -->
+      <div class="onboarding-step-content" id="onboardingStep2" style="display: none;">
+        <div class="onboarding-avatar-preview-area">
+          <div class="onboarding-avatar-circle" id="onboardingAvatarPreview">
+            <img src="" alt="Avatar" id="onboardingAvatarImg" style="display: none;">
+            <span id="onboardingAvatarLetter">ME</span>
+          </div>
+        </div>
+
+        <h2 class="onboarding-title">Pick your look</h2>
+        <p class="onboarding-desc">Upload a photo, generate with Cloud AI, or keep your initials badge.</p>
+
+        <div class="onboarding-avatar-actions">
+          <input type="file" id="onboardingPhotoInput" accept="image/*" style="display: none;">
+          <button class="btn-secondary onboarding-action-btn" id="btnOnboardingUpload">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
+            <span>Upload Photo</span>
+          </button>
+
+          <div class="onboarding-ai-box">
+            <div class="onboarding-ai-row">
+              <input type="text" id="onboardingAiPromptInput" class="onboarding-sub-input" placeholder="AI prompt (e.g. 3D cute neon cat avatar)">
+              <button class="btn-primary" id="btnOnboardingGenerateAi" style="padding: 7px 12px; font-size: 11px;">✦ AI Generate</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="onboarding-footer">
+          <button class="btn-onboarding-skip" id="btnOnboardingSkip2">Skip</button>
+          <button class="btn-primary btn-onboarding-next" id="btnOnboardingNext2">Continue →</button>
+        </div>
+      </div>
+
+      <!-- Step 3: Force Enable Notifications (Simple English Explanation) -->
+      <div class="onboarding-step-content" id="onboardingStep3" style="display: none;">
+        <div class="onboarding-icon-bubble" style="background: rgba(255, 230, 109, 0.2); color: var(--accent-amber);">
+          <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path><path d="M13.73 21a2 2 0 0 1-3.46 0"></path></svg>
+        </div>
+
+        <h2 class="onboarding-title">Turn On Notifications</h2>
+        <p class="onboarding-desc">
+          DeskDrop needs your permission to alert you when a friend drops a file or sends a message — even when this tab is minimized or in the background.
+        </p>
+
+        <div style="width: 100%; display: flex; flex-direction: column; gap: 8px; margin-top: 6px;">
+          <button class="btn-primary" id="btnOnboardingEnableNotif" style="padding: 12px 20px; font-size: 14px; font-weight: 700; display: flex; align-items: center; justify-content: center; gap: 8px; width: 100%;">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path><path d="M13.73 21a2 2 0 0 1-3.46 0"></path></svg>
+            <span id="txtOnboardingNotifBtn">🔔 Allow Notifications</span>
+          </button>
+          <div id="onboardingNotifStatus" style="font-size: 12px; color: var(--text-tertiary); line-height: 1.4;">
+            Click above to grant notification permission.
+          </div>
+        </div>
+
+        <div class="onboarding-footer">
+          <button class="btn-onboarding-skip" id="btnOnboardingSkip3">Skip</button>
+          <button class="btn-primary btn-onboarding-next" id="btnOnboardingNext3" disabled style="opacity: 0.5;">Continue →</button>
+        </div>
+      </div>
+
+      <!-- Step 4: Create or Join a Group -->
+      <div class="onboarding-step-content" id="onboardingStep4" style="display: none;">
+        <div class="onboarding-icon-bubble" style="background: rgba(108, 99, 255, 0.2); color: var(--accent-indigo);">
+          <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg>
+        </div>
+
+        <h2 class="onboarding-title">Create or Join a Group</h2>
+        <p class="onboarding-desc">Start your first group workspace or connect using a friend's room code.</p>
+
+        <div class="drawer-tabs" style="margin-bottom: 12px;">
+          <button class="drawer-tab-btn active" id="onboardingTabCreate">Create Group</button>
+          <button class="drawer-tab-btn" id="onboardingTabJoin">Join Group</button>
+        </div>
+
+        <!-- Create Pane -->
+        <div id="onboardingCreateGroupPane">
+          <input type="text" id="onboardingGroupNameInput" class="onboarding-input" placeholder="Group Name (e.g. Project Alpha, Friends)">
+          <div class="color-swatches" id="onboardingColorSwatches" style="margin-top: 10px; justify-content: center;"></div>
+        </div>
+
+        <!-- Join Pane -->
+        <div id="onboardingJoinGroupPane" style="display: none;">
+          <input type="text" id="onboardingJoinCodeInput" class="onboarding-input" placeholder="Room Code (e.g. BWZ-98)">
+          <div style="font-size: 11px; color: var(--text-tertiary); text-align: center; margin-top: 6px;">
+            Ask a friend for their active room code to join their workspace.
+          </div>
+        </div>
+
+        <div class="onboarding-footer">
+          <button class="btn-onboarding-skip" id="btnOnboardingSkip4">Skip</button>
+          <button class="btn-primary btn-onboarding-next" id="btnOnboardingNext4">Continue →</button>
+        </div>
+      </div>
+
+      <!-- Step 5: Download / Install WebApp (Simple English Explanation) -->
+      <div class="onboarding-step-content" id="onboardingStep5" style="display: none;">
+        <div class="onboarding-icon-bubble" style="background: rgba(78, 205, 196, 0.2); color: var(--accent-teal);">
+          <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+        </div>
+
+        <h2 class="onboarding-title">Install DeskDrop App</h2>
+        <p class="onboarding-desc">
+          Install DeskDrop as a standalone app on your Mac, Windows, or phone. It opens in its own window, launches instantly from your desktop or home screen, and works offline.
+        </p>
+
+        <div style="width: 100%; display: flex; flex-direction: column; gap: 8px; margin-top: 4px;">
+          <button class="btn-secondary" id="btnOnboardingInstallApp" style="padding: 12px 18px; font-size: 13px; font-weight: 600; display: flex; align-items: center; justify-content: center; gap: 8px; border-color: var(--accent-teal); color: #FFF; width: 100%;">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="5" y="2" width="14" height="20" rx="2" ry="2"></rect><line x1="12" y1="18" x2="12.01" y2="18"></line></svg>
+            <span id="txtInstallButton">⬇️ Install App on Device</span>
+          </button>
+          <div id="installGuideText" style="font-size: 11px; color: var(--text-tertiary); line-height: 1.4; display: none;">
+            In Safari: tap Share <b>⎋</b> and select <b>"Add to Home Screen"</b> or <b>"Add to Dock"</b>.<br>In Chrome/Edge: click the Install icon in the address bar.
+          </div>
+        </div>
+
+        <div class="onboarding-footer">
+          <button class="btn-primary btn-onboarding-next" id="btnOnboardingFinish" style="width: 100%;">Finish &amp; Open DeskDrop 🚀</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast Notification Container -->
+  <div class="toast-container" id="toastContainer"></div>
+
+  <!-- Application Logic -->
+  <script src="app.js"></script>
+</body>
+</html>
