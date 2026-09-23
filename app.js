@@ -189,35 +189,16 @@ function loadStoredState() {
     savedGroups = [];
   }
 
-  // Ensure default group exists
-  if (savedGroups.length === 0) {
-    savedGroups.push({
-      id: 'group_default',
-      name: 'Main Workspace',
-      color: '#6C63FF',
-      code: savedRoom
-    });
-    localStorage.setItem('deskdrop_groups', JSON.stringify(savedGroups));
-  }
+  // Purge any legacy 'group_default' or 'Main Workspace' from saved groups
+  savedGroups = savedGroups.filter(g => g && g.id !== 'group_default' && g.name !== 'Main Workspace');
+  localStorage.setItem('deskdrop_groups', JSON.stringify(savedGroups));
 
-  // Ensure each group has a unique room code
-  let hasMissingCode = false;
-  savedGroups.forEach(g => {
-    if (!g.code) {
-      g.code = generateGroupCode();
-      hasMissingCode = true;
-    }
-  });
-  if (hasMissingCode) {
-    localStorage.setItem('deskdrop_groups', JSON.stringify(savedGroups));
-  }
-
-  let savedActiveChat = savedGroups.length > 0 ? savedGroups[0] : null;
+  let savedActiveChat = null;
   try {
     const rawChat = localStorage.getItem('deskdrop_active_chat');
     if (rawChat) {
       const parsed = JSON.parse(rawChat);
-      if (parsed && (parsed.type === 'dm' || savedGroups.some(g => g.id === parsed.id))) {
+      if (parsed && (parsed.type === 'dm' || (parsed.type === 'group' && savedGroups.some(g => g.id === parsed.id)))) {
         savedActiveChat = parsed;
       }
     }
@@ -1006,6 +987,20 @@ function handleIncomingData(conn, packet) {
       break;
     }
 
+    case 'group-invite': {
+      if (!packet.group || !packet.group.members) return;
+      if (packet.group.members.includes(STATE.myPeerId)) {
+        if (!STATE.groups.some(g => g.id === packet.group.id)) {
+          STATE.groups.push(packet.group);
+          persistGroups();
+          updateChatsUI();
+          showToast(`Added to group "${packet.group.name}" by ${packet.senderUsername || 'a friend'}!`, '👥');
+          playReceivedSound();
+        }
+      }
+      break;
+    }
+
     case 'local-beacon':
     case 'presence':
     case 'presence-ack':
@@ -1507,7 +1502,7 @@ function switchActiveChat(target) {
       iconEl.textContent = '✦';
       iconEl.style.background = 'var(--grad-accent)';
     }
-    if (subEl) subEl.textContent = 'Click + to create or join a group';
+    if (subEl) subEl.textContent = 'Click + to create a group or connect on AirDrop';
     if (chevron) chevron.style.display = 'none';
 
     const feed = document.getElementById('chatFeed');
@@ -1519,13 +1514,13 @@ function switchActiveChat(target) {
           </div>
           <h2 class="welcome-title">Welcome to DeskDrop</h2>
           <p class="welcome-desc">
-            Your decentralized workspace is ready. Click the <b>+</b> button in the sidebar to create your first group or join friends with a room code.
+            Connect with nearby friends on AirDrop Radar, or tap the <b>+</b> button in the sidebar to create a private group chat.
           </p>
-          <button class="btn-primary" id="btnFeedCreateGroup" style="padding: 10px 20px; font-size: 13px; margin-top: 10px; cursor: pointer;">+ Create or Join Group</button>
+          <button class="btn-primary" id="btnFeedCreateGroup" style="padding: 10px 20px; font-size: 13px; margin-top: 10px; cursor: pointer;">+ Create Group</button>
         </div>
       `;
       document.getElementById('btnFeedCreateGroup')?.addEventListener('click', () => {
-        document.getElementById('groupModal')?.classList.add('open');
+        openNewGroupModal();
       });
     }
 
@@ -1542,40 +1537,41 @@ function switchActiveChat(target) {
 
   if (target.type === 'group') {
     const groupObj = STATE.groups.find(g => g.id === target.id) || target;
-    const groupCode = groupObj.code || target.code || STATE.roomCode;
+    const memberCount = (groupObj.members && groupObj.members.length) || 1;
     if (titleEl) titleEl.textContent = target.name;
     if (pillEl) {
       pillEl.textContent = 'Group';
-      pillEl.style.background = `${target.color}25`;
-      pillEl.style.color = target.color;
+      pillEl.style.background = `${target.color || '#6C63FF'}25`;
+      pillEl.style.color = target.color || '#6C63FF';
     }
     if (iconEl) {
-      iconEl.textContent = target.name.charAt(0);
-      iconEl.style.background = target.color;
+      if (groupObj.icon) {
+        iconEl.innerHTML = `<img src="${escapeHtml(groupObj.icon)}" alt="Icon" style="width: 100%; height: 100%; border-radius: 50%; object-fit: cover;">`;
+      } else {
+        iconEl.textContent = target.name.charAt(0).toUpperCase();
+      }
+      iconEl.style.background = target.color || '#6C63FF';
     }
-    if (subEl) subEl.textContent = `Group Channel • Code: ${groupCode} • ${STATE.connections.size + 1} online`;
+    if (subEl) subEl.textContent = `Group • ${memberCount} member${memberCount === 1 ? '' : 's'}`;
     const chevron = document.getElementById('headerInfoChevron');
     if (chevron) chevron.style.display = 'inline-block';
-
-    // If active room does not match this group's code, switch session
-    const cleanCurrent = (STATE.roomCode || '').toUpperCase();
-    const cleanTarget = (groupCode || '').toUpperCase();
-    if (cleanTarget && cleanCurrent !== cleanTarget) {
-      initPeerSession(cleanTarget);
-    }
   } else {
     const peer = STATE.knownPeers.get(target.id) || { username: target.name, avatar: '' };
     if (titleEl) titleEl.textContent = peer.username;
     if (pillEl) {
-      pillEl.textContent = '1-on-1 Direct';
+      pillEl.textContent = 'Direct Message';
       pillEl.style.background = 'rgba(78, 205, 196, 0.2)';
       pillEl.style.color = 'var(--accent-teal)';
     }
     if (iconEl) {
-      iconEl.textContent = peer.username.charAt(0);
+      if (peer.avatar) {
+        iconEl.innerHTML = `<img src="${escapeHtml(peer.avatar)}" alt="Avatar" style="width: 100%; height: 100%; border-radius: 50%; object-fit: cover;">`;
+      } else {
+        iconEl.textContent = peer.username.charAt(0).toUpperCase();
+      }
       iconEl.style.background = target.color || '#4ECDC4';
     }
-    if (subEl) subEl.textContent = 'Direct WebRTC Encrypted Channel';
+    if (subEl) subEl.textContent = 'Direct Encrypted Peer Connection';
     const chevron = document.getElementById('headerInfoChevron');
     if (chevron) chevron.style.display = 'none';
   }
@@ -2004,9 +2000,7 @@ function updateLocalProfileUI() {
     btnProfileNewGroup.onclick = () => {
       const profModal = document.getElementById('profileModal');
       if (profModal) profModal.classList.remove('open');
-      const grpModal = document.getElementById('groupModal');
-      if (grpModal) grpModal.classList.add('open');
-      document.getElementById('tabCreateGroup')?.click();
+      openNewGroupModal();
     };
   }
 }
@@ -2102,45 +2096,69 @@ contextMenuDelete?.addEventListener('click', () => {
   closeContextMenu();
 });
 
-function updateGroupsUI() {
-  const container = document.getElementById('groupsListContainer');
-  const badge = document.getElementById('groupsCountBadge');
+function updateChatsUI() {
+  const container = document.getElementById('chatsListContainer');
+  const badge = document.getElementById('chatsCountBadge');
+  const emptyNotice = document.getElementById('emptyChatsNotice');
   if (!container) return;
 
-  if (badge) badge.textContent = `${STATE.groups.length} active`;
-  container.innerHTML = '';
+  // 1. Connected direct peers (only peers where isConnected is true OR where chat history exists)
+  const connectedPeers = Array.from(STATE.knownPeers.entries()).filter(([id, peer]) => {
+    if (id === STATE.peerId || id === STATE.myPeerId) return false;
+    return peer.isConnected === true || getChatHistory(id).length > 0;
+  });
 
-  if (STATE.groups.length === 0) {
-    container.innerHTML = `
-      <div class="empty-state-notice" style="padding: 16px 12px; font-size: 11px;">
-        No groups joined yet.<br>Click <b style="color: var(--accent-teal);">+</b> above to start or join one!
-      </div>
-    `;
+  // 2. User groups
+  const groups = STATE.groups || [];
+
+  const totalChats = connectedPeers.length + groups.length;
+  if (badge) {
+    badge.textContent = `${totalChats} chat${totalChats === 1 ? '' : 's'}`;
+  }
+
+  // Clear existing items but preserve emptyNotice element
+  Array.from(container.children).forEach(ch => {
+    if (ch !== emptyNotice) ch.remove();
+  });
+
+  if (totalChats === 0) {
+    if (emptyNotice) emptyNotice.style.display = 'block';
     return;
   }
 
-  STATE.groups.forEach(group => {
+  if (emptyNotice) emptyNotice.style.display = 'none';
+
+  // Render Groups
+  groups.forEach(group => {
     const isActive = STATE.activeChat && STATE.activeChat.type === 'group' && STATE.activeChat.id === group.id;
     const item = document.createElement('div');
     item.className = `group-nav-item ${isActive ? 'active' : ''}`;
+    
+    let iconHtml = '';
+    if (group.icon) {
+      iconHtml = `<img src="${escapeHtml(group.icon)}" alt="Icon" style="width: 100%; height: 100%; object-fit: cover;">`;
+    } else {
+      iconHtml = escapeHtml(group.name.charAt(0).toUpperCase());
+    }
+
+    const memberCount = (group.members && group.members.length) || 1;
     item.innerHTML = `
-      <div class="group-color-icon" style="background: ${group.color};">
-        ${escapeHtml(group.name.charAt(0))}
+      <div class="group-color-icon" style="background: ${group.color || '#6C63FF'};">
+        ${iconHtml}
       </div>
       <div class="group-item-info">
-        <div class="group-name" style="color: ${group.color};">${escapeHtml(group.name)}</div>
+        <div class="group-name" style="color: ${group.color || '#FFF'};">${escapeHtml(group.name)}</div>
         <div class="group-sub" style="display: flex; align-items: center; gap: 4px;">
-          <span>Group</span>
-          ${group.code ? `<span class="group-code-pill">${escapeHtml(group.code)}</span>` : ''}
+          <span>Group • ${memberCount} member${memberCount === 1 ? '' : 's'}</span>
         </div>
       </div>
     `;
 
     item.onclick = () => {
-      switchActiveChat({ type: 'group', id: group.id, name: group.name, color: group.color, code: group.code });
+      switchActiveChat({ type: 'group', id: group.id, name: group.name, color: group.color, icon: group.icon });
+      setAppMode('chat');
     };
 
-    // Right-Click Context Menu for Deletion
     item.oncontextmenu = (e) => {
       e.preventDefault();
       e.stopPropagation();
@@ -2149,33 +2167,9 @@ function updateGroupsUI() {
 
     container.appendChild(item);
   });
-}
 
-function updatePeersUI() {
-  const container = document.getElementById('peersListContainer');
-  const badge = document.getElementById('peersCountBadge');
-  const notice = document.getElementById('emptyPeersNotice');
-  if (!container) return;
-
-  // Filter out self
-  const validPeers = Array.from(STATE.knownPeers.entries()).filter(([id]) => id !== STATE.peerId && id !== STATE.myPeerId);
-  const count = validPeers.length;
-  if (badge) badge.textContent = `${count} active`;
-
-  if (count === 0) {
-    if (notice) notice.style.display = 'block';
-    Array.from(container.children).forEach(ch => {
-      if (ch !== notice) ch.remove();
-    });
-    return;
-  }
-
-  if (notice) notice.style.display = 'none';
-  Array.from(container.children).forEach(ch => {
-    if (ch !== notice) ch.remove();
-  });
-
-  validPeers.forEach(([peerId, peer]) => {
+  // Render Direct Messages
+  connectedPeers.forEach(([peerId, peer]) => {
     const isActive = STATE.activeChat && STATE.activeChat.type === 'dm' && STATE.activeChat.id === peerId;
     const item = document.createElement('div');
     item.className = `peer-nav-item ${isActive ? 'active' : ''}`;
@@ -2189,7 +2183,6 @@ function updatePeersUI() {
       </div>
       <div class="peer-details">
         <div class="peer-name-row">
-          <span class="member-group-dot" style="background: ${peer.groupColor || '#6C63FF'}; color: ${peer.groupColor || '#6C63FF'};" title="Group: ${escapeHtml(peer.groupName || 'Workspace')}"></span>
           <span class="peer-name">${escapeHtml(peer.username || 'Teammate')}</span>
           ${peer.isNearby ? `<span class="nearby-mesh-tag">⚡️ Nearby</span>` : ''}
         </div>
@@ -2207,9 +2200,9 @@ function updatePeersUI() {
 
     item.onclick = () => {
       switchActiveChat({ type: 'dm', id: peerId, name: peer.username || 'Teammate', color: peer.groupColor || '#6C63FF' });
+      setAppMode('chat');
     };
 
-    // Right-Click Context Menu for Deletion
     item.oncontextmenu = (e) => {
       e.preventDefault();
       e.stopPropagation();
@@ -2218,6 +2211,14 @@ function updatePeersUI() {
 
     container.appendChild(item);
   });
+}
+
+function updateGroupsUI() {
+  updateChatsUI();
+}
+
+function updatePeersUI() {
+  updateChatsUI();
 }
 
 // ==========================================
@@ -2419,19 +2420,22 @@ function sendConnectionRequest(targetPeer) {
 }
 
 let currentIncomingRequest = null;
+let bannerTouchStartX = 0;
+let bannerCurrentDeltaX = 0;
+let isBannerSwiping = false;
 
 function showConnectionRequestModal(packet) {
   currentIncomingRequest = packet;
-  const modal = document.getElementById('connectionRequestModal');
-  const titleEl = document.getElementById('connectPromptTitle');
-  const deviceEl = document.getElementById('connectPromptDevice');
-  const descEl = document.getElementById('connectPromptDesc');
-  const avatarImg = document.getElementById('connectPromptAvatar');
-  const avatarPh = document.getElementById('connectPromptPlaceholder');
+  const banner = document.getElementById('macosNotifBanner');
+  const titleEl = document.getElementById('connectNotifTitle');
+  const descEl = document.getElementById('connectNotifDesc');
+  const avatarImg = document.getElementById('connectNotifAvatar');
+  const avatarPh = document.getElementById('connectNotifPlaceholder');
+
+  if (!banner) return;
 
   if (titleEl) titleEl.textContent = `${packet.username || 'Nearby Device'} wants to connect`;
-  if (deviceEl) deviceEl.textContent = packet.deviceName || (packet.deviceType === 'mac' ? 'MacBook Pro' : 'Apple Device');
-  if (descEl) descEl.textContent = `Accepting will open a direct secure channel for chatting and instant file drops.`;
+  if (descEl) descEl.textContent = `${packet.deviceName || (packet.deviceType === 'mac' ? 'MacBook Pro' : 'Apple Device')} • Tap Accept or swipe right to dismiss`;
 
   if (packet.avatar) {
     if (avatarImg) {
@@ -2447,8 +2451,13 @@ function showConnectionRequestModal(packet) {
     }
   }
 
+  // Reset any previous drag or animation states
+  banner.classList.remove('dismissing', 'swiping');
+  banner.style.transform = '';
+  banner.style.opacity = '';
+  banner.style.display = 'block';
+
   playReceivedSound();
-  modal?.classList.add('open');
 
   // If window is minimized or tab is in background, trigger native macOS browser notification
   if (document.hidden) {
@@ -2460,84 +2469,14 @@ function showConnectionRequestModal(packet) {
   }
 }
 
-function setupConnectionModalHandlers() {
-  const modal = document.getElementById('connectionRequestModal');
-  const btnAccept = document.getElementById('btnAcceptConnect');
-  const btnDecline = document.getElementById('btnDeclineConnect');
+function dismissConnectionRequest(decline = true) {
+  const banner = document.getElementById('macosNotifBanner');
+  if (!banner) return;
 
-  btnAccept?.addEventListener('click', () => {
-    if (!currentIncomingRequest) return;
+  banner.classList.add('dismissing');
+
+  if (decline && currentIncomingRequest) {
     const req = currentIncomingRequest;
-    modal?.classList.remove('open');
-
-    // Trigger electric blue ripple on peer node if on canvas
-    const peerNode = document.querySelector(`.radar-peer-node[data-peer-id="${req.senderPeerId}"]`);
-    if (peerNode) {
-      const wave = document.createElement('div');
-      wave.className = 'electric-ripple-wave';
-      peerNode.appendChild(wave);
-    }
-
-    // 1. Send accept packet
-    broadcastRoomPacket({
-      type: 'connect-accepted',
-      requestId: req.requestId,
-      targetPeerId: req.senderPeerId,
-      senderPeerId: STATE.myPeerId,
-      peerJsId: STATE.myPeerJsId,
-      username: STATE.username,
-      avatar: STATE.avatar,
-      deviceType: STATE.deviceType,
-      deviceName: STATE.deviceName,
-      groupColor: (STATE.groups[0] && STATE.groups[0].color) || '#6C63FF'
-    });
-
-    // 2. Mark peer as connected
-    let peer = STATE.knownPeers.get(req.senderPeerId);
-    if (!peer) {
-      peer = {
-        peerId: req.senderPeerId,
-        peerJsId: req.peerJsId || req.senderPeerId,
-        username: req.username || 'Nearby Device',
-        avatar: req.avatar || '',
-        deviceType: req.deviceType || 'mac',
-        deviceName: req.deviceName || 'Apple Device',
-        groupName: 'Direct Message',
-        groupColor: req.groupColor || '#6C63FF',
-        status: 'online',
-        lastSeen: Date.now(),
-        isNearby: true
-      };
-      STATE.knownPeers.set(req.senderPeerId, peer);
-    }
-    peer.isConnected = true;
-
-    // 3. Connect via WebRTC if possible
-    if (req.peerJsId && STATE.peer) {
-      connectToPeer(req.peerJsId);
-    }
-
-    // 4. Open DM chat and switch to chat mode
-    switchActiveChat({
-      type: 'dm',
-      id: req.senderPeerId,
-      name: req.username || 'Teammate',
-      color: req.groupColor || '#6C63FF'
-    });
-    setAppMode('chat');
-
-    showToast(`Connected with ${req.username}! You can now chat and share files.`, '🤝');
-    playSentSound();
-    updateRadarUI();
-    updatePeersUI();
-    currentIncomingRequest = null;
-  });
-
-  btnDecline?.addEventListener('click', () => {
-    if (!currentIncomingRequest) return;
-    const req = currentIncomingRequest;
-    modal?.classList.remove('open');
-
     broadcastRoomPacket({
       type: 'connect-declined',
       requestId: req.requestId,
@@ -2545,123 +2484,182 @@ function setupConnectionModalHandlers() {
       senderPeerId: STATE.myPeerId,
       username: STATE.username
     });
+    showToast(`Declined connection with ${req.username}`, '✕');
+  }
 
-    showToast(`Declined connection request from ${req.username}`, '✕');
-    currentIncomingRequest = null;
+  currentIncomingRequest = null;
+
+  setTimeout(() => {
+    banner.style.display = 'none';
+    banner.classList.remove('dismissing', 'swiping');
+    banner.style.transform = '';
+    banner.style.opacity = '';
+  }, 280);
+}
+
+function acceptConnectionRequest() {
+  if (!currentIncomingRequest) return;
+  const req = currentIncomingRequest;
+  const banner = document.getElementById('macosNotifBanner');
+
+  if (banner) {
+    banner.classList.add('dismissing');
+    setTimeout(() => {
+      banner.style.display = 'none';
+      banner.classList.remove('dismissing', 'swiping');
+      banner.style.transform = '';
+      banner.style.opacity = '';
+    }, 280);
+  }
+
+  // Trigger electric blue ripple on peer node if on canvas
+  const peerNode = document.querySelector(`.radar-peer-node[data-peer-id="${req.senderPeerId}"]`);
+  if (peerNode) {
+    const wave = document.createElement('div');
+    wave.className = 'electric-ripple-wave';
+    peerNode.appendChild(wave);
+  }
+
+  // 1. Send accept packet
+  broadcastRoomPacket({
+    type: 'connect-accepted',
+    requestId: req.requestId,
+    targetPeerId: req.senderPeerId,
+    senderPeerId: STATE.myPeerId,
+    peerJsId: STATE.myPeerJsId,
+    username: STATE.username,
+    avatar: STATE.avatar,
+    deviceType: STATE.deviceType,
+    deviceName: STATE.deviceName,
+    groupColor: (STATE.groups[0] && STATE.groups[0].color) || '#6C63FF'
   });
-}
 
-async function sendAirDropFile(targetPeer, file) {
-  const transferId = 'ad_' + Date.now() + '_' + Math.random().toString(36).substr(2, 6);
-  const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
-
-  showToast(`AirDropping "${file.name}" to ${targetPeer.username}...`, '📡');
-
-  const fileMeta = {
-    type: 'file-start',
-    isAirDrop: true,
-    transferId,
-    name: file.name,
-    size: file.size,
-    mimeType: file.type || 'application/octet-stream',
-    totalChunks,
-    senderName: STATE.username,
-    senderAvatar: STATE.avatar,
-    senderDevice: STATE.deviceName,
-    targetType: 'dm',
-    targetId: targetPeer.peerId,
-    timestamp: Date.now()
-  };
-
-  // Broadcast start packet
-  broadcastRoomPacket(fileMeta);
-
-  // Stream 64KB chunks
-  let offset = 0;
-  let chunkIndex = 0;
-
-  while (offset < file.size) {
-    const slice = file.slice(offset, offset + CHUNK_SIZE);
-    const arrayBuffer = await slice.arrayBuffer();
-
-    const chunkPacket = {
-      type: 'file-chunk',
-      isAirDrop: true,
-      transferId,
-      chunkIndex,
-      data: arrayBuffer
+  // 2. Mark peer as connected
+  let peer = STATE.knownPeers.get(req.senderPeerId);
+  if (!peer) {
+    peer = {
+      peerId: req.senderPeerId,
+      peerJsId: req.peerJsId || req.senderPeerId,
+      username: req.username || 'Nearby Device',
+      avatar: req.avatar || '',
+      deviceType: req.deviceType || 'mac',
+      deviceName: req.deviceName || 'Apple Device',
+      groupName: 'Direct Message',
+      groupColor: req.groupColor || '#6C63FF',
+      status: 'online',
+      lastSeen: Date.now(),
+      isNearby: true
     };
+    STATE.knownPeers.set(req.senderPeerId, peer);
+  }
+  peer.isConnected = true;
 
-    // Send chunk
-    const conn = STATE.connections.get(targetPeer.peerJsId) || STATE.connections.get(targetPeer.peerId);
-    if (conn && conn.open) {
-      sendPayload(conn, chunkPacket);
-    } else {
-      broadcastRoomPacket(chunkPacket);
-    }
-
-    offset += CHUNK_SIZE;
-    chunkIndex++;
-
-    if (chunkIndex % 3 === 0) {
-      await new Promise(r => setTimeout(r, 10));
-    }
+  // 3. Connect via WebRTC if possible
+  if (req.peerJsId && STATE.peer) {
+    connectToPeer(req.peerJsId);
   }
 
-  const endPacket = {
-    type: 'file-end',
-    isAirDrop: true,
-    transferId
-  };
+  // 4. Open DM chat and switch to chat mode
+  switchActiveChat({
+    type: 'dm',
+    id: req.senderPeerId,
+    name: req.username || 'Teammate',
+    color: req.groupColor || '#6C63FF'
+  });
+  setAppMode('chat');
 
-  const conn = STATE.connections.get(targetPeer.peerJsId) || STATE.connections.get(targetPeer.peerId);
-  if (conn && conn.open) {
-    sendPayload(conn, endPacket);
-  } else {
-    broadcastRoomPacket(endPacket);
-  }
-
-  playTransferSound();
-  showToast(`AirDrop completed: "${file.name}" sent!`, '✅');
+  showToast(`Connected with ${req.username}! You can now chat and share files.`, '🤝');
+  playSentSound();
+  updateRadarUI();
+  updatePeersUI();
+  currentIncomingRequest = null;
 }
 
-function showAirDropAcceptSheet(packet, onAccept, onDecline) {
-  const modal = document.getElementById('airdropAcceptModal');
-  const title = document.getElementById('airdropPromptTitle');
-  const desc = document.getElementById('airdropPromptDesc');
-  const btnAccept = document.getElementById('btnAcceptAirDrop');
-  const btnDecline = document.getElementById('btnDeclineAirDrop');
+function setupSwipeableNotificationBanner() {
+  const banner = document.getElementById('macosNotifBanner');
+  if (!banner) return;
 
-  if (!modal) {
-    onAccept();
-    return;
-  }
+  const btnAccept = document.getElementById('btnAcceptConnect');
+  const btnDecline = document.getElementById('btnDeclineConnect');
+  const btnDismiss = document.getElementById('btnDismissNotif');
 
-  if (title) title.textContent = `AirDrop from ${packet.senderName || 'Nearby Device'}`;
-  if (desc) desc.innerHTML = `Would you like to receive <b>"${escapeHtml(packet.name)}"</b> (${formatBytes(packet.size)})?`;
+  btnAccept?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    acceptConnectionRequest();
+  });
 
-  modal.classList.add('open');
-  playReceivedSound();
+  btnDecline?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    dismissConnectionRequest(true);
+  });
 
-  const handleAccept = () => {
-    modal.classList.remove('open');
-    cleanup();
-    onAccept();
+  btnDismiss?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    dismissConnectionRequest(true);
+  });
+
+  // Touch Swipe Events (iOS / Mobile / Touchpad)
+  banner.addEventListener('touchstart', (e) => {
+    if (e.target.tagName === 'BUTTON' || e.target.closest('button')) return;
+    bannerTouchStartX = e.touches[0].clientX;
+    bannerCurrentDeltaX = 0;
+    isBannerSwiping = true;
+    banner.classList.add('swiping');
+  }, { passive: true });
+
+  banner.addEventListener('touchmove', (e) => {
+    if (!isBannerSwiping) return;
+    const currentX = e.touches[0].clientX;
+    bannerCurrentDeltaX = Math.max(0, currentX - bannerTouchStartX);
+    banner.style.transform = `translateX(${bannerCurrentDeltaX}px)`;
+    banner.style.opacity = `${Math.max(0, 1 - (bannerCurrentDeltaX / 240))}`;
+  }, { passive: true });
+
+  const handleTouchEnd = () => {
+    if (!isBannerSwiping) return;
+    isBannerSwiping = false;
+    banner.classList.remove('swiping');
+    if (bannerCurrentDeltaX > 75) {
+      dismissConnectionRequest(true);
+    } else {
+      banner.style.transform = '';
+      banner.style.opacity = '';
+    }
   };
 
-  const handleDecline = () => {
-    modal.classList.remove('open');
-    cleanup();
-    onDecline();
-  };
+  banner.addEventListener('touchend', handleTouchEnd);
+  banner.addEventListener('touchcancel', handleTouchEnd);
 
-  const cleanup = () => {
-    btnAccept?.removeEventListener('click', handleAccept);
-    btnDecline?.removeEventListener('click', handleDecline);
-  };
+  // Mouse Drag Swipe Events (macOS / Desktop feel)
+  let isMouseDragging = false;
+  let mouseStartX = 0;
 
-  btnAccept?.addEventListener('click', handleAccept);
-  btnDecline?.addEventListener('click', handleDecline);
+  banner.addEventListener('mousedown', (e) => {
+    if (e.target.tagName === 'BUTTON' || e.target.closest('button')) return;
+    isMouseDragging = true;
+    mouseStartX = e.clientX;
+    bannerCurrentDeltaX = 0;
+    banner.classList.add('swiping');
+  });
+
+  window.addEventListener('mousemove', (e) => {
+    if (!isMouseDragging) return;
+    bannerCurrentDeltaX = Math.max(0, e.clientX - mouseStartX);
+    banner.style.transform = `translateX(${bannerCurrentDeltaX}px)`;
+    banner.style.opacity = `${Math.max(0, 1 - (bannerCurrentDeltaX / 240))}`;
+  });
+
+  window.addEventListener('mouseup', () => {
+    if (!isMouseDragging) return;
+    isMouseDragging = false;
+    banner.classList.remove('swiping');
+    if (bannerCurrentDeltaX > 75) {
+      dismissConnectionRequest(true);
+    } else {
+      banner.style.transform = '';
+      banner.style.opacity = '';
+    }
+  });
 }
 
 function setAppMode(mode) {
@@ -2670,78 +2668,295 @@ function setAppMode(mode) {
   const chatView = document.getElementById('mainChatArea');
   const btnSideRadar = document.getElementById('btnSideAirDrop');
   const btnSideChat = document.getElementById('btnSideChat');
+  const mobNavRadar = document.getElementById('mobNavRadar');
+  const mobNavChat = document.getElementById('mobNavChat');
 
   if (mode === 'radar') {
     if (radarView) radarView.style.display = 'flex';
     if (chatView) chatView.style.display = 'none';
     btnSideRadar?.classList.add('active');
     btnSideChat?.classList.remove('active');
+    mobNavRadar?.classList.add('active');
+    mobNavChat?.classList.remove('active');
     updateRadarUI();
   } else {
     if (radarView) radarView.style.display = 'none';
     if (chatView) chatView.style.display = 'flex';
     btnSideRadar?.classList.remove('active');
     btnSideChat?.classList.add('active');
+    mobNavRadar?.classList.remove('active');
+    mobNavChat?.classList.add('active');
   }
 }
 
-function triggerNativeMacAirDrop() {
-  const fileInput = document.getElementById('nativeShareFileInput');
-  if (!fileInput) return;
-  fileInput.value = '';
-  fileInput.onchange = () => {
-    if (fileInput.files && fileInput.files.length > 0) {
-      const files = Array.from(fileInput.files);
-      if (navigator.share && navigator.canShare && navigator.canShare({ files })) {
-        navigator.share({
-          files: files,
-          title: files[0].name,
-          text: 'Shared via DeskDrop'
-        }).then(() => {
-          showToast('macOS AirDrop share completed!', '🍏');
-        }).catch((err) => {
-          if (err.name !== 'AbortError') {
-            console.debug('Share err:', err);
-          }
-        });
-      } else {
-        showToast('Native share not supported on this browser context', 'ℹ️');
+// ==========================================
+// 14. RESPONSIVE SIDEBAR & QUICK TOUR CONTROLLERS
+// ==========================================
+
+function toggleSidebar(forceState) {
+  const sidebar = document.getElementById('sidebar');
+  const scrim = document.getElementById('sidebarScrim');
+  if (!sidebar) return;
+
+  const isMobileOrTablet = window.innerWidth < 1024;
+  if (isMobileOrTablet) {
+    const willOpen = (forceState !== undefined) ? forceState : !sidebar.classList.contains('open');
+    if (willOpen) {
+      sidebar.classList.add('open');
+      scrim?.classList.add('active');
+    } else {
+      sidebar.classList.remove('open');
+      scrim?.classList.remove('active');
+    }
+  } else {
+    // Desktop: collapse sidebar
+    const willCollapse = (forceState !== undefined) ? !forceState : !sidebar.classList.contains('collapsed');
+    if (willCollapse) {
+      sidebar.classList.add('collapsed');
+    } else {
+      sidebar.classList.remove('collapsed');
+    }
+  }
+}
+
+// Spotlight Quick Tour State & Configuration
+const TOUR_STEPS = [
+  {
+    targetId: 'finderIdentityAnchor',
+    fallbackId: 'radarVisibilityPill',
+    title: 'Your AirDrop Identity & Status',
+    desc: 'DeskDrop automatically recognizes your device name and discovers nearby peers on the local network. Toggle between Discoverable and Invisible anytime.',
+    badge: 'Step 1 of 4'
+  },
+  {
+    targetId: 'radarStage',
+    fallbackId: 'airdropRadarArea',
+    title: 'Zero-Gravity Radar Orbit',
+    desc: 'Nearby devices on the same Wi-Fi float into orbit. Click on any teammate\'s device to request a direct connection or drop files seamlessly.',
+    badge: 'Step 2 of 4'
+  },
+  {
+    targetId: 'mainChatArea',
+    fallbackId: 'chatFeed',
+    title: 'Direct Chat & Drop Zone',
+    desc: 'When connected, exchange encrypted peer-to-peer messages and lightning-fast file drops with zero cloud storage.',
+    badge: 'Step 3 of 4'
+  },
+  {
+    targetId: 'groupsListContainer',
+    fallbackId: 'sidebar',
+    title: 'Workspaces & Room Codes',
+    desc: 'Collaborate with teams by joining custom workspace codes or pinning direct peer connections in your sidebar.',
+    badge: 'Step 4 of 4'
+  }
+];
+
+let currentTourIndex = 0;
+let isTourActive = false;
+
+function startQuickTour(force = false) {
+  if (!force && localStorage.getItem('deskdrop_tour_seen') === 'true') return;
+  const overlay = document.getElementById('spotlightTourOverlay');
+  if (!overlay) return;
+
+  currentTourIndex = 0;
+  isTourActive = true;
+  overlay.style.display = 'block';
+
+  setAppMode('radar');
+  renderTourStep(0);
+}
+
+function renderTourStep(index) {
+  if (index < 0 || index >= TOUR_STEPS.length) {
+    endQuickTour();
+    return;
+  }
+
+  currentTourIndex = index;
+  const step = TOUR_STEPS[index];
+  const overlay = document.getElementById('spotlightTourOverlay');
+  const cutout = document.getElementById('spotlightCutout');
+  const highlightBox = document.getElementById('spotlightHighlightBox');
+  const card = document.getElementById('spotlightCard');
+  const badge = document.getElementById('spotlightBadge');
+  const title = document.getElementById('spotlightTitle');
+  const desc = document.getElementById('spotlightDesc');
+  const btnPrev = document.getElementById('btnTourPrev');
+  const btnNext = document.getElementById('btnTourNext');
+
+  if (badge) badge.textContent = step.badge;
+  if (title) title.textContent = step.title;
+  if (desc) desc.textContent = step.desc;
+
+  if (btnPrev) {
+    btnPrev.style.display = index === 0 ? 'none' : 'inline-block';
+  }
+  if (btnNext) {
+    btnNext.textContent = index === TOUR_STEPS.length - 1 ? 'Finish ✦' : 'Next →';
+  }
+
+  // Adjust view depending on the step
+  if (index === 0 || index === 1) {
+    setAppMode('radar');
+    if (window.innerWidth < 1024) toggleSidebar(false);
+  } else if (index === 2) {
+    setAppMode('chat');
+    if (window.innerWidth < 1024) toggleSidebar(false);
+  } else if (index === 3) {
+    if (window.innerWidth < 1024) {
+      toggleSidebar(true);
+    }
+  }
+
+  // Calculate layout coordinates after DOM renders
+  requestAnimationFrame(() => {
+    let targetEl = document.getElementById(step.targetId);
+    if (!targetEl || targetEl.offsetParent === null) {
+      targetEl = document.getElementById(step.fallbackId);
+    }
+
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+
+    let targetRect = { top: vh * 0.22, left: vw * 0.1, width: vw * 0.8, height: vh * 0.45 };
+    if (targetEl && targetEl.getBoundingClientRect) {
+      const r = targetEl.getBoundingClientRect();
+      if (r.width > 0 && r.height > 0) {
+        targetRect = r;
       }
     }
-  };
-  fileInput.click();
-}
 
-function openRoomCodeModal() {
-  const modal = document.getElementById('roomCodeModal');
-  const input = document.getElementById('inputCustomRoomCode');
-  if (modal && input) {
-    input.value = STATE.roomCode;
-    modal.classList.add('open');
-    setTimeout(() => input.focus(), 60);
-  }
-}
+    const pad = 10;
+    const cutX = Math.max(8, targetRect.left - pad);
+    const cutY = Math.max(8, targetRect.top - pad);
+    const cutW = Math.min(vw - cutX - 8, targetRect.width + pad * 2);
+    const cutH = Math.min(vh - cutY - 8, targetRect.height + pad * 2);
 
-function applyCustomRoomCode(newCode) {
-  const clean = sanitizeRoomCode(newCode).toUpperCase();
-  if (!clean) return;
-  initPeerSession(clean);
-  showToast(`Connected to room ${clean}. Scanning nearby...`, '📡');
-  document.getElementById('roomCodeModal')?.classList.remove('open');
-}
+    if (cutout) {
+      cutout.setAttribute('x', cutX);
+      cutout.setAttribute('y', cutY);
+      cutout.setAttribute('width', cutW);
+      cutout.setAttribute('height', cutH);
+      cutout.setAttribute('rx', 14);
+      cutout.setAttribute('ry', 14);
+    }
 
-function copyInviteRoomLink() {
-  const url = `${window.location.origin}${window.location.pathname}?room=${STATE.roomCode}`;
-  navigator.clipboard.writeText(url).then(() => {
-    showToast(`Invite link for room ${STATE.roomCode} copied!`, '📋');
+    if (highlightBox) {
+      highlightBox.style.left = `${cutX}px`;
+      highlightBox.style.top = `${cutY}px`;
+      highlightBox.style.width = `${cutW}px`;
+      highlightBox.style.height = `${cutH}px`;
+      highlightBox.style.opacity = '1';
+    }
+
+    // Position Card smartly: prefer below target; if no room, above target
+    if (card) {
+      const cardWidth = Math.min(340, vw - 32);
+      let cardLeft = cutX + (cutW / 2) - (cardWidth / 2);
+      cardLeft = Math.max(16, Math.min(vw - cardWidth - 16, cardLeft));
+
+      let cardTop = cutY + cutH + 16;
+      if (cardTop + 220 > vh) {
+        cardTop = Math.max(16, cutY - 220);
+      }
+
+      card.style.left = `${cardLeft}px`;
+      card.style.top = `${cardTop}px`;
+    }
   });
 }
 
+function endQuickTour() {
+  isTourActive = false;
+  localStorage.setItem('deskdrop_tour_seen', 'true');
+  const overlay = document.getElementById('spotlightTourOverlay');
+  if (overlay) overlay.style.display = 'none';
+  if (window.innerWidth < 1024) {
+    toggleSidebar(false);
+  }
+}
+
 // ==========================================
-// 14. EVENT HANDLERS & MODAL MANAGEMENT
+// 15. EVENT HANDLERS & MODAL MANAGEMENT
 // ==========================================
 
 function setupEventHandlers() {
+  // Sidebar Toggle Buttons (Desktop titlebar button, tablet/mobile drawer buttons, and scrim)
+  document.getElementById('btnToggleSidebar')?.addEventListener('click', () => toggleSidebar());
+  document.getElementById('btnRadarDrawer')?.addEventListener('click', () => toggleSidebar(true));
+  document.getElementById('btnChatDrawer')?.addEventListener('click', () => toggleSidebar(true));
+  document.getElementById('sidebarScrim')?.addEventListener('click', () => toggleSidebar(false));
+
+  // Global Keyboard Shortcuts (Cmd+B / Ctrl+B to toggle sidebar, Escape to dismiss sheets/tour)
+  window.addEventListener('keydown', (e) => {
+    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'b') {
+      e.preventDefault();
+      toggleSidebar();
+    }
+    if (e.key === 'Escape') {
+      if (isTourActive) {
+        endQuickTour();
+        return;
+      }
+      dismissConnectionRequest(true);
+      toggleSidebar(false);
+      document.querySelectorAll('.modal-backdrop.open, .modal-overlay.open').forEach(m => {
+        m.classList.remove('open');
+      });
+      const ctxMenu = document.getElementById('customContextMenu');
+      if (ctxMenu) ctxMenu.style.display = 'none';
+    }
+  });
+
+  // Mobile Bottom Navigation Bar Actions
+  document.getElementById('mobNavRadar')?.addEventListener('click', () => {
+    toggleSidebar(false);
+    setAppMode('radar');
+  });
+  document.getElementById('mobNavChat')?.addEventListener('click', () => {
+    toggleSidebar(false);
+    setAppMode('chat');
+  });
+  document.getElementById('mobNavWorkspaces')?.addEventListener('click', () => {
+    const sidebar = document.getElementById('sidebar');
+    const isCurrentlyOpen = sidebar?.classList.contains('open');
+    toggleSidebar(!isCurrentlyOpen);
+  });
+  document.getElementById('mobNavSettings')?.addEventListener('click', () => {
+    toggleSidebar(false);
+    updateLocalProfileUI();
+    document.getElementById('profileModal')?.classList.add('open');
+  });
+
+  // Quick Tour Buttons
+  document.getElementById('btnStartTour')?.addEventListener('click', () => startQuickTour(true));
+  document.getElementById('btnSettingsStartTour')?.addEventListener('click', () => {
+    document.getElementById('profileModal')?.classList.remove('open');
+    startQuickTour(true);
+  });
+  document.getElementById('btnTourNext')?.addEventListener('click', () => {
+    if (currentTourIndex < TOUR_STEPS.length - 1) {
+      renderTourStep(currentTourIndex + 1);
+    } else {
+      endQuickTour();
+      showToast('Quick Tour completed! Enjoy DeskDrop.', '✨');
+    }
+  });
+  document.getElementById('btnTourPrev')?.addEventListener('click', () => {
+    if (currentTourIndex > 0) {
+      renderTourStep(currentTourIndex - 1);
+    }
+  });
+  document.getElementById('btnTourSkip')?.addEventListener('click', endQuickTour);
+  document.getElementById('btnTourClose')?.addEventListener('click', endQuickTour);
+
+  window.addEventListener('resize', () => {
+    if (isTourActive) {
+      renderTourStep(currentTourIndex);
+    }
+  });
+
   // AirDrop Mode Switching (Radar vs Chat)
   document.getElementById('btnSideAirDrop')?.addEventListener('click', () => setAppMode('radar'));
   document.getElementById('btnSideChat')?.addEventListener('click', () => setAppMode('chat'));
@@ -2759,49 +2974,8 @@ function setupEventHandlers() {
     document.getElementById('btnVisInvisible')?.classList.remove('active');
   }
 
-  // Connection Handshake Modal Handlers
-  setupConnectionModalHandlers();
-
-  // Native macOS AirDrop Trigger
-  document.getElementById('btnTitlebarNativeAirDrop')?.addEventListener('click', triggerNativeMacAirDrop);
-  document.getElementById('btnFooterNativeAirDrop')?.addEventListener('click', triggerNativeMacAirDrop);
-
-  // Radar Toolbar Actions
-  document.getElementById('btnRadarChangeCode')?.addEventListener('click', openRoomCodeModal);
-  document.getElementById('btnRadarCopyLink')?.addEventListener('click', copyInviteRoomLink);
-  document.getElementById('btnRadarInviteFriends')?.addEventListener('click', copyInviteRoomLink);
-
-  // Room Code Modal Handlers
-  document.getElementById('btnCloseRoomCodeModal')?.addEventListener('click', () => {
-    document.getElementById('roomCodeModal')?.classList.remove('open');
-  });
-  document.getElementById('roomCodeModal')?.addEventListener('click', (e) => {
-    if (e.target.id === 'roomCodeModal') {
-      document.getElementById('roomCodeModal')?.classList.remove('open');
-    }
-  });
-  document.getElementById('btnGenerateRandomCode')?.addEventListener('click', () => {
-    const input = document.getElementById('inputCustomRoomCode');
-    if (input) input.value = generateRoomCode();
-  });
-  document.getElementById('btnApplyRoomCode')?.addEventListener('click', () => {
-    const input = document.getElementById('inputCustomRoomCode');
-    if (input && input.value) applyCustomRoomCode(input.value);
-  });
-  document.getElementById('inputCustomRoomCode')?.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') {
-      const input = document.getElementById('inputCustomRoomCode');
-      if (input && input.value) applyCustomRoomCode(input.value);
-    }
-  });
-
-  // Target Peer AirDrop File Input
-  document.getElementById('airdropTargetFileInput')?.addEventListener('change', (e) => {
-    const input = e.target;
-    if (input.files && input.files.length > 0 && activeAirDropTargetPeer) {
-      Array.from(input.files).forEach(f => sendAirDropFile(activeAirDropTargetPeer, f));
-    }
-  });
+  // macOS-Style Swipeable Connection Notification Banner Setup
+  setupSwipeableNotificationBanner();
 
   // Offline & Online detection
   window.addEventListener('online', () => {
@@ -3010,14 +3184,45 @@ function setupEventHandlers() {
     showToast('Creator handles saved!', '✅');
   });
 
-  // Group Create/Join Modal
+  // ==========================================
+  // WHATSAPP-STYLE PLUS MENU & NEW GROUP MODAL
+  // ==========================================
   const groupModal = document.getElementById('groupModal');
-  document.getElementById('btnOpenGroupModal')?.addEventListener('click', () => groupModal.classList.add('open'));
-  document.getElementById('btnCloseGroupModal')?.addEventListener('click', () => groupModal.classList.remove('open'));
+  const plusDropdownMenu = document.getElementById('plusDropdownMenu');
+  const btnOpenGroupModal = document.getElementById('btnOpenGroupModal');
+  const menuItemCreateGroup = document.getElementById('menuItemCreateGroup');
+
+  btnOpenGroupModal?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (plusDropdownMenu) {
+      const isVisible = plusDropdownMenu.style.display === 'flex';
+      plusDropdownMenu.style.display = isVisible ? 'none' : 'flex';
+    }
+  });
+
+  document.addEventListener('click', (e) => {
+    if (plusDropdownMenu && !plusDropdownMenu.contains(e.target) && e.target !== btnOpenGroupModal) {
+      plusDropdownMenu.style.display = 'none';
+    }
+  });
+
+  menuItemCreateGroup?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (plusDropdownMenu) plusDropdownMenu.style.display = 'none';
+    openNewGroupModal();
+  });
+
+  document.getElementById('btnCloseGroupModal')?.addEventListener('click', () => {
+    groupModal?.classList.remove('open');
+  });
+
+  let selectedGroupColor = GROUP_ACCENT_COLORS[0].hex;
+  let customGroupIconDataUrl = '';
+  const selectedParticipantIds = new Set();
 
   const swatchesContainer = document.getElementById('groupColorSwatches');
-  let selectedGroupColor = GROUP_ACCENT_COLORS[0].hex;
   if (swatchesContainer) {
+    swatchesContainer.innerHTML = '';
     GROUP_ACCENT_COLORS.forEach((c, idx) => {
       const sw = document.createElement('button');
       sw.className = `swatch-btn ${idx === 0 ? 'selected' : ''}`;
@@ -3026,90 +3231,189 @@ function setupEventHandlers() {
         document.querySelectorAll('.swatch-btn').forEach(b => b.classList.remove('selected'));
         sw.classList.add('selected');
         selectedGroupColor = c.hex;
+        const preview = document.getElementById('newGroupIconPreview');
+        if (preview) preview.style.background = selectedGroupColor;
       };
       swatchesContainer.appendChild(sw);
     });
   }
 
-  const tabCreate = document.getElementById('tabCreateGroup');
-  const tabJoin = document.getElementById('tabJoinGroup');
-  const createContent = document.getElementById('createGroupTabContent');
-  const joinContent = document.getElementById('joinGroupTabContent');
+  // Live Group Name Input & Icon letter
+  const inputNewGroupName = document.getElementById('inputNewGroupName');
+  const newGroupIconLetter = document.getElementById('newGroupIconLetter');
+  const newGroupIconImg = document.getElementById('newGroupIconImg');
+  const newGroupIconPreview = document.getElementById('newGroupIconPreview');
+  const groupIconFileInput = document.getElementById('groupIconFileInput');
+  const btnUploadGroupIcon = document.getElementById('btnUploadGroupIcon');
+  const btnRemoveGroupIcon = document.getElementById('btnRemoveGroupIcon');
 
-  tabCreate?.addEventListener('click', () => {
-    tabCreate.classList.add('active');
-    tabJoin.classList.remove('active');
-    createContent.style.display = 'flex';
-    joinContent.style.display = 'none';
+  inputNewGroupName?.addEventListener('input', () => {
+    if (!customGroupIconDataUrl && newGroupIconLetter) {
+      const val = inputNewGroupName.value.trim();
+      newGroupIconLetter.textContent = val ? val.charAt(0).toUpperCase() : '#';
+    }
   });
 
-  tabJoin?.addEventListener('click', () => {
-    tabJoin.classList.add('active');
-    tabCreate.classList.remove('active');
-    joinContent.style.display = 'flex';
-    createContent.style.display = 'none';
+  btnUploadGroupIcon?.addEventListener('click', () => groupIconFileInput?.click());
+  newGroupIconPreview?.addEventListener('click', () => groupIconFileInput?.click());
+
+  groupIconFileInput?.addEventListener('change', (e) => {
+    const file = e.target.files && e.target.files[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onload = (evt) => {
+        customGroupIconDataUrl = evt.target.result;
+        if (newGroupIconImg) {
+          newGroupIconImg.src = customGroupIconDataUrl;
+          newGroupIconImg.style.display = 'block';
+        }
+        if (newGroupIconLetter) newGroupIconLetter.style.display = 'none';
+        if (btnRemoveGroupIcon) btnRemoveGroupIcon.style.display = 'inline-block';
+      };
+      reader.readAsDataURL(file);
+    }
   });
 
-  function createNewGroup(groupName, color) {
-    const code = generateGroupCode();
-    const newGroup = {
-      id: 'group_' + Date.now(),
-      name: groupName.trim(),
-      color: color || '#6C63FF',
-      code: code
-    };
-    STATE.groups.push(newGroup);
-    persistGroups();
-    updateGroupsUI();
-    updateLocalProfileUI();
-    switchActiveChat({ type: 'group', id: newGroup.id, name: newGroup.name, color: newGroup.color, code: newGroup.code });
-    initPeerSession(code);
-    return newGroup;
+  btnRemoveGroupIcon?.addEventListener('click', () => {
+    customGroupIconDataUrl = '';
+    if (groupIconFileInput) groupIconFileInput.value = '';
+    if (newGroupIconImg) {
+      newGroupIconImg.src = '';
+      newGroupIconImg.style.display = 'none';
+    }
+    if (newGroupIconLetter) {
+      newGroupIconLetter.style.display = 'block';
+      const val = inputNewGroupName ? inputNewGroupName.value.trim() : '';
+      newGroupIconLetter.textContent = val ? val.charAt(0).toUpperCase() : '#';
+    }
+    if (btnRemoveGroupIcon) btnRemoveGroupIcon.style.display = 'none';
+  });
+
+  function updateParticipantsBadge() {
+    const badge = document.getElementById('selectedParticipantsCount');
+    if (badge) {
+      badge.textContent = `${selectedParticipantIds.size} selected`;
+    }
   }
 
-  function joinGroupByCode(rawCode) {
-    const code = sanitizeRoomCode(rawCode).toUpperCase();
-    if (!code) return;
+  function openNewGroupModal() {
+    if (!groupModal) return;
+    if (inputNewGroupName) inputNewGroupName.value = '';
+    customGroupIconDataUrl = '';
+    if (groupIconFileInput) groupIconFileInput.value = '';
+    if (newGroupIconImg) {
+      newGroupIconImg.src = '';
+      newGroupIconImg.style.display = 'none';
+    }
+    if (newGroupIconLetter) {
+      newGroupIconLetter.textContent = '#';
+      newGroupIconLetter.style.display = 'block';
+    }
+    if (btnRemoveGroupIcon) btnRemoveGroupIcon.style.display = 'none';
 
-    let group = STATE.groups.find(g => g.code && g.code.toUpperCase() === code);
-    if (!group) {
-      group = {
-        id: 'group_' + Date.now(),
-        name: `Group ${code}`,
-        color: '#6C63FF',
-        code: code
-      };
-      STATE.groups.push(group);
-      persistGroups();
-      updateGroupsUI();
-      updateLocalProfileUI();
+    selectedParticipantIds.clear();
+    updateParticipantsBadge();
+
+    // Reset color swatches
+    selectedGroupColor = GROUP_ACCENT_COLORS[0].hex;
+    document.querySelectorAll('.swatch-btn').forEach((b, idx) => {
+      b.classList.toggle('selected', idx === 0);
+    });
+    if (newGroupIconPreview) newGroupIconPreview.style.background = selectedGroupColor;
+
+    // Populate connected participants list
+    const participantsContainer = document.getElementById('groupParticipantsList');
+    if (participantsContainer) {
+      participantsContainer.innerHTML = '';
+      const availablePeers = Array.from(STATE.knownPeers.entries()).filter(([id]) => {
+        return id !== STATE.peerId && id !== STATE.myPeerId;
+      });
+
+      if (availablePeers.length === 0) {
+        participantsContainer.innerHTML = `
+          <div style="font-size: 12px; color: var(--text-tertiary); text-align: center; padding: 18px 8px; line-height: 1.45;">
+            No connected friends yet.<br>
+            <span style="color: var(--accent-teal);">You can create the group now and invite friends anytime!</span>
+          </div>
+        `;
+      } else {
+        availablePeers.forEach(([peerId, peer]) => {
+          const item = document.createElement('div');
+          item.className = 'participant-picker-item';
+          item.dataset.peerId = peerId;
+
+          const avatarHtml = peer.avatar
+            ? `<img src="${escapeHtml(peer.avatar)}" alt="Peer">`
+            : escapeHtml((peer.username || 'T').substring(0, 2).toUpperCase());
+
+          item.innerHTML = `
+            <div class="participant-picker-left">
+              <div class="participant-picker-avatar">${avatarHtml}</div>
+              <div class="participant-picker-info">
+                <span class="participant-picker-name">${escapeHtml(peer.username || 'Teammate')}</span>
+                <span class="participant-picker-device">${escapeHtml(peer.deviceName || 'DeskDrop Device')} ${peer.isConnected ? '• Online' : ''}</span>
+              </div>
+            </div>
+            <div class="participant-picker-check">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"></polyline></svg>
+            </div>
+          `;
+
+          item.onclick = () => {
+            if (selectedParticipantIds.has(peerId)) {
+              selectedParticipantIds.delete(peerId);
+              item.classList.remove('selected');
+            } else {
+              selectedParticipantIds.add(peerId);
+              item.classList.add('selected');
+            }
+            updateParticipantsBadge();
+          };
+
+          participantsContainer.appendChild(item);
+        });
+      }
     }
 
-    switchActiveChat({ type: 'group', id: group.id, name: group.name, color: group.color, code: group.code });
-    initPeerSession(code);
-    showToast(`Joined group ${code}!`, '⚡️');
-    return group;
+    groupModal.classList.add('open');
+    inputNewGroupName?.focus();
   }
+  window.openNewGroupModal = openNewGroupModal;
 
   document.getElementById('btnSubmitCreateGroup')?.addEventListener('click', () => {
-    const nameInput = document.getElementById('inputNewGroupName');
-    const groupName = nameInput.value.trim();
-    if (groupName) {
-      const created = createNewGroup(groupName, selectedGroupColor);
-      nameInput.value = '';
-      groupModal.classList.remove('open');
-      showToast(`Group "${groupName}" created! Code: ${created.code}`, '🎉');
+    const groupName = inputNewGroupName ? inputNewGroupName.value.trim() : '';
+    if (!groupName) {
+      showToast('Please enter a group name!', '⚠️');
+      inputNewGroupName?.focus();
+      return;
     }
-  });
 
-  document.getElementById('btnSubmitJoinGroup')?.addEventListener('click', () => {
-    const codeInput = document.getElementById('inputJoinGroupCode');
-    const code = sanitizeRoomCode(codeInput.value);
-    if (code) {
-      joinGroupByCode(code);
-      codeInput.value = '';
-      groupModal.classList.remove('open');
-    }
+    const newGroup = {
+      id: 'group_' + Date.now() + '_' + Math.random().toString(36).substr(2, 5),
+      name: groupName,
+      color: selectedGroupColor,
+      icon: customGroupIconDataUrl || '',
+      members: [STATE.myPeerId, ...Array.from(selectedParticipantIds)],
+      createdAt: Date.now()
+    };
+
+    STATE.groups.push(newGroup);
+    persistGroups();
+    updateChatsUI();
+    updateLocalProfileUI();
+
+    // Broadcast group-invite to connected network so members receive it
+    broadcastRoomPacket({
+      type: 'group-invite',
+      group: newGroup,
+      senderPeerId: STATE.myPeerId,
+      senderUsername: STATE.username
+    });
+
+    groupModal.classList.remove('open');
+    switchActiveChat({ type: 'group', id: newGroup.id, name: newGroup.name, color: newGroup.color, icon: newGroup.icon });
+    setAppMode('chat');
+    showToast(`Group "${groupName}" created!`, '🎉');
   });
 
   // WhatsApp-Style Group Info Sheet & Group Wallpaper
@@ -3131,40 +3435,21 @@ function setupEventHandlers() {
     const countEl = document.getElementById('groupInfoMembersCount');
     const membersList = document.getElementById('groupMembersList');
     const wpStatus = document.getElementById('groupWallpaperStatusText');
-    const codeDisplay = document.getElementById('groupInfoCodeDisplay');
-    const copyBtn = document.getElementById('btnCopyGroupCode');
-    const copyLinkBtn = document.getElementById('btnCopyGroupLink');
 
     if (titleEl) titleEl.textContent = groupObj.name;
-    if (iconLetter) iconLetter.textContent = groupObj.name.charAt(0);
-    if (iconBox) iconBox.style.background = groupObj.color || 'var(--accent-indigo)';
-
-    const validPeers = Array.from(STATE.knownPeers.entries()).filter(([id]) => id !== STATE.peerId && id !== STATE.myPeerId);
-    const totalMembers = validPeers.length + 1;
-    if (subEl) subEl.textContent = `Group Channel • Code: ${groupCode}`;
-    if (countEl) countEl.textContent = `${totalMembers} member${totalMembers > 1 ? 's' : ''} in room`;
-
-    if (codeDisplay) codeDisplay.textContent = groupCode;
-
-    if (copyBtn) {
-      copyBtn.textContent = 'Copy Code';
-      copyBtn.onclick = () => {
-        navigator.clipboard.writeText(groupCode).then(() => {
-          copyBtn.textContent = 'Copied! ✓';
-          showToast(`Group code ${groupCode} copied!`, '📋');
-          setTimeout(() => copyBtn.textContent = 'Copy Code', 2000);
-        });
-      };
+    if (iconBox) {
+      iconBox.style.background = groupObj.color || 'var(--accent-indigo)';
+      if (groupObj.icon) {
+        iconBox.innerHTML = `<img src="${escapeHtml(groupObj.icon)}" alt="Icon" style="width: 100%; height: 100%; border-radius: 50%; object-fit: cover;">`;
+      } else {
+        iconBox.innerHTML = `<span id="groupInfoIconLetter">${escapeHtml(groupObj.name.charAt(0).toUpperCase())}</span>`;
+      }
     }
 
-    if (copyLinkBtn) {
-      copyLinkBtn.onclick = () => {
-        const inviteUrl = `${window.location.origin}${window.location.pathname}?join=${encodeURIComponent(groupCode)}`;
-        navigator.clipboard.writeText(inviteUrl).then(() => {
-          showToast(`Direct invite link copied!`, '🔗');
-        });
-      };
-    }
+    const memberIds = groupObj.members || [STATE.myPeerId];
+    const totalMembers = memberIds.length;
+    if (subEl) subEl.textContent = `Group Workspace`;
+    if (countEl) countEl.textContent = `${totalMembers} member${totalMembers === 1 ? '' : 's'}`;
 
     const customGroupWp = localStorage.getItem('deskdrop_wallpaper_group_' + groupObj.id);
     if (wpStatus) {
@@ -3176,7 +3461,7 @@ function setupEventHandlers() {
     if (membersList) {
       membersList.innerHTML = '';
 
-      // 1. Current User (Host)
+      // 1. Current User (Host / Creator)
       const selfItem = document.createElement('div');
       selfItem.className = 'group-member-item';
       selfItem.innerHTML = `
@@ -3186,7 +3471,7 @@ function setupEventHandlers() {
         <div class="group-member-text-col">
           <div class="group-member-name-row">
             <span class="group-member-name">${escapeHtml(STATE.username)} (You)</span>
-            <span class="group-member-role-badge">Host</span>
+            <span class="group-member-role-badge">Creator</span>
           </div>
           <div class="group-member-status">
             <span class="status-dot"></span>
@@ -3196,14 +3481,16 @@ function setupEventHandlers() {
       `;
       membersList.appendChild(selfItem);
 
-      // 2. Discovered Peers / Room Members
-      if (validPeers.length === 0) {
+      // 2. Other Group Members
+      const otherMemberIds = memberIds.filter(id => id !== STATE.myPeerId && id !== STATE.peerId);
+      if (otherMemberIds.length === 0) {
         const emptyNotice = document.createElement('div');
         emptyNotice.style.cssText = 'padding: 12px; margin-top: 6px; font-size: 12px; color: var(--text-muted); text-align: center; background: rgba(255, 255, 255, 0.03); border-radius: 8px; border: 1px dashed rgba(255, 255, 255, 0.1);';
-        emptyNotice.innerHTML = `Waiting for friends to join... Share code <b style="color: var(--accent-indigo);">${escapeHtml(groupCode)}</b>`;
+        emptyNotice.textContent = 'No other members added yet.';
         membersList.appendChild(emptyNotice);
       } else {
-        validPeers.forEach(([peerId, peer]) => {
+        otherMemberIds.forEach(peerId => {
+          const peer = STATE.knownPeers.get(peerId) || { username: 'Teammate', avatar: '', isConnected: false };
           const peerItem = document.createElement('div');
           peerItem.className = 'group-member-item';
           peerItem.innerHTML = `
@@ -3216,8 +3503,8 @@ function setupEventHandlers() {
                 <span class="group-member-role-badge" style="background: rgba(108, 99, 255, 0.15); color: var(--accent-indigo);">Member</span>
               </div>
               <div class="group-member-status">
-                <span class="status-dot"></span>
-                <span>Online</span>
+                <span class="status-dot" style="${peer.isConnected ? '' : 'background: var(--text-tertiary);'}"></span>
+                <span>${peer.isConnected ? 'Online' : 'Offline'}</span>
               </div>
             </div>
             <button class="btn-member-chat" style="background: rgba(108, 99, 255, 0.2); border: 1px solid rgba(108, 99, 255, 0.4); color: #FFF; border-radius: 6px; padding: 5px 10px; font-size: 11px; cursor: pointer; display: flex; align-items: center; gap: 4px;">
@@ -3712,6 +3999,11 @@ function initOnboardingWizard() {
     updateLocalProfileUI();
     updateGroupsUI();
     showToast(`Welcome to DeskDrop, ${STATE.username}!`, '🚀');
+
+    // Launch Quick Tour if not seen
+    if (!localStorage.getItem('deskdrop_tour_seen')) {
+      setTimeout(() => startQuickTour(), 600);
+    }
   }
 
   document.getElementById('btnOnboardingFinish')?.addEventListener('click', () => {
@@ -3732,6 +4024,11 @@ async function initApp() {
   setupEventHandlers();
   initOnboardingWizard();
 
+  // If user completed onboarding previously but hasn't seen tour, launch it
+  if (localStorage.getItem('deskdrop_onboarding_completed') === 'true' && !localStorage.getItem('deskdrop_tour_seen')) {
+    setTimeout(() => startQuickTour(), 800);
+  }
+
   // Fetch local subnet hash for zero-config same Wi-Fi clustering
   await fetchNetworkSubnetHash();
 
@@ -3744,13 +4041,23 @@ async function initApp() {
   const paramJoin = sanitizeRoomCode(urlParams.get('join') || urlParams.get('room'));
 
   if (paramJoin) {
-    joinGroupByCode(paramJoin);
+    let group = STATE.groups.find(g => g.id === paramJoin || (g.name && g.name.toLowerCase() === paramJoin.toLowerCase()));
+    if (!group) {
+      group = {
+        id: 'group_' + Date.now(),
+        name: `Group ${paramJoin.toUpperCase()}`,
+        color: '#6C63FF',
+        members: [STATE.myPeerId]
+      };
+      STATE.groups.push(group);
+      persistGroups();
+      updateChatsUI();
+    }
+    switchActiveChat({ type: 'group', id: group.id, name: group.name, color: group.color });
+    initPeerSession(STATE.roomCode || 'DD-RADAR');
   } else {
-    const activeRoom = (STATE.activeChat && STATE.activeChat.type === 'group' && STATE.activeChat.code)
-      ? STATE.activeChat.code
-      : (STATE.roomCode || 'DD-ROOM');
     switchActiveChat(STATE.activeChat);
-    initPeerSession(activeRoom);
+    initPeerSession(STATE.roomCode || 'DD-RADAR');
   }
 
   // Open in AirDrop Radar mode so looking for nearby devices starts immediately
