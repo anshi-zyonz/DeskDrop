@@ -268,6 +268,32 @@
           </div>
         </div>
 
+        <!-- Group Invite Code Card (Share Code to Add Teammates) -->
+        <div class="sheet-menu-item expanded">
+          <div class="sheet-item-header" style="cursor: default;">
+            <div class="sheet-item-icon" style="background: rgba(255, 107, 107, 0.2); color: #FF6B6B;">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+            </div>
+            <div class="sheet-item-text">
+              <div class="sheet-item-title">Group Invite Code</div>
+              <div class="sheet-item-sub">Give this code to friends to join this group</div>
+            </div>
+          </div>
+
+          <div class="sheet-expandable-content" style="display: block;">
+            <div style="display: flex; align-items: center; justify-content: space-between; background: rgba(0, 0, 0, 0.35); border: 1px solid var(--glass-border); border-radius: 12px; padding: 10px 14px; margin-bottom: 8px;">
+              <div>
+                <div style="font-size: 10px; color: var(--text-tertiary); text-transform: uppercase; letter-spacing: 0.5px;">Group Code</div>
+                <div style="font-family: var(--font-mono); font-size: 18px; font-weight: 700; color: var(--accent-mint); letter-spacing: 1px;" id="groupInfoCodeDisplay">DD-XXXX</div>
+              </div>
+              <button class="btn-primary" id="btnCopyGroupCode" style="padding: 6px 14px; font-size: 11px;">Copy Code</button>
+            </div>
+            <button class="btn-secondary" id="btnCopyGroupLink" style="width: 100%; font-size: 11px; padding: 8px 12px; display: flex; align-items: center; justify-content: center; gap: 6px;">
+              <span>🔗 Copy Direct Invite Link</span>
+            </button>
+          </div>
+        </div>
+
         <!-- Custom Wallpaper for this Group -->
         <div class="sheet-menu-item expanded">
           <div class="sheet-item-header" style="cursor: default;">
@@ -577,6 +603,8 @@
         <button class="btn-primary" id="btnApplyAvatar" disabled>Set Active Avatar</button>
       </div>
     </div>
+  </div>
+
   <!-- First-Time User Onboarding Wizard Modal -->
   <div class="modal-backdrop" id="onboardingModal" style="display: none; z-index: 500;">
     <div class="onboarding-card">
@@ -728,6 +756,15 @@
           <button class="btn-primary btn-onboarding-next" id="btnOnboardingFinish" style="width: 100%;">Finish &amp; Open DeskDrop 🚀</button>
         </div>
       </div>
+    </div>
+  </div>
+
+  <!-- Right-Click Context Menu for Groups & Direct Messages -->
+  <div class="context-menu" id="customContextMenu" style="display: none;">
+    <div class="context-menu-header" id="contextMenuTitle">Options</div>
+    <div class="context-menu-item danger" id="contextMenuDelete">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
+      <span id="contextMenuDeleteLabel">Delete</span>
     </div>
   </div>
 
