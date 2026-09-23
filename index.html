@@ -19,6 +19,8 @@
 
   <!-- Local Self-Contained PeerJS (Works 100% Offline) -->
   <script src="peerjs.min.js"></script>
+  <!-- Universal High-Speed Room Broker (Paho MQTT over WSS) -->
+  <script src="paho-mqtt.min.js"></script>
 </head>
 <body>
   <!-- Ambient background glow elements -->
@@ -442,24 +444,24 @@
           </div>
         </div>
 
-        <!-- Item 4: Workspace Room Code -->
+        <!-- Item 4: All Workspaces & Groups -->
         <div class="sheet-menu-item" id="itemRoomActions">
           <div class="sheet-item-header">
             <div class="sheet-item-icon" style="background: rgba(255, 230, 109, 0.2); color: var(--accent-amber);">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path></svg>
             </div>
             <div class="sheet-item-text">
-              <div class="sheet-item-title">Workspace Room Code</div>
-              <div class="sheet-item-sub" id="sheetRoomCodeSub">Code: BWZ-98</div>
+              <div class="sheet-item-title">Workspaces &amp; Groups</div>
+              <div class="sheet-item-sub" id="sheetRoomCodeSub">All your joined workspaces</div>
             </div>
             <div class="sheet-item-chevron">›</div>
           </div>
 
           <div class="sheet-expandable-content" id="expandRoomBox" style="display: none;">
-            <div style="display: flex; gap: 8px; margin-top: 8px;">
-              <button class="btn-secondary" id="btnSettingsCopyRoom" style="flex: 1; font-size: 12px;">Copy Room Link</button>
-              <button class="btn-secondary" id="btnSettingsNewRoom" style="flex: 1; font-size: 12px;">New Room Code</button>
+            <div id="profileWorkspacesList" style="display: flex; flex-direction: column; gap: 8px; margin-top: 8px;">
+              <!-- Dynamically populated with all created/joined groups -->
             </div>
+            <button class="btn-primary" id="btnProfileNewGroup" style="width: 100%; margin-top: 10px; font-size: 12px; padding: 10px 14px;">+ Create New Workspace</button>
           </div>
         </div>
 

@@ -403,12 +403,163 @@ function sanitizeRoomCode(raw) {
 // 5. WEBRTC P2P SESSION & OFFLINE DUAL-MESH
 // ==========================================
 
+// Universal Room Broker (MQTT over Secure WebSocket)
+let mqttClient = null;
+let currentMqttTopic = null;
+
+function initRoomBroker(roomCode) {
+  if (typeof Paho === 'undefined' || !Paho.MQTT || !navigator.onLine) return;
+
+  const cleanRoom = sanitizeRoomCode(roomCode).toUpperCase().replace(/[^A-Z0-9]/g, '');
+  const topic = `deskdrop/v3/room/${cleanRoom}`;
+
+  if (mqttClient && mqttClient.isConnected() && currentMqttTopic === topic) {
+    const activeGroup = (STATE.activeChat && STATE.activeChat.type === 'group')
+      ? STATE.groups.find(g => g.id === STATE.activeChat.id)
+      : STATE.groups[0];
+
+    broadcastRoomPacket({
+      type: 'presence',
+      senderPeerId: STATE.myPeerId,
+      username: STATE.username,
+      avatar: STATE.avatar,
+      groupCode: roomCode,
+      groupName: activeGroup ? activeGroup.name : 'Workspace',
+      groupColor: activeGroup ? activeGroup.color : '#6C63FF',
+      groupId: activeGroup ? activeGroup.id : null
+    });
+    return;
+  }
+
+  if (mqttClient && mqttClient.isConnected()) {
+    try { mqttClient.disconnect(); } catch (e) {}
+  }
+
+  currentMqttTopic = topic;
+  const clientId = `dd_${STATE.myPeerId.replace(/[^a-zA-Z0-9]/g, '')}_${Math.floor(Math.random() * 10000)}`;
+
+  try {
+    mqttClient = new Paho.MQTT.Client('broker.emqx.io', 8084, '/mqtt', clientId);
+
+    mqttClient.onConnectionLost = (res) => {
+      console.debug('[Room Broker] Disconnected:', res.errorMessage);
+      setTimeout(() => {
+        if (currentMqttTopic === topic) initRoomBroker(roomCode);
+      }, 4000);
+    };
+
+    mqttClient.onMessageArrived = (message) => {
+      try {
+        const packet = JSON.parse(message.payloadString);
+        if (packet && packet.senderPeerId !== STATE.myPeerId) {
+          handleIncomingData({ peer: packet.senderPeerId, open: true }, packet);
+        }
+      } catch (e) {}
+    };
+
+    mqttClient.connect({
+      useSSL: true,
+      timeout: 5,
+      keepAliveInterval: 30,
+      cleanSession: true,
+      onSuccess: () => {
+        mqttClient.subscribe(topic);
+        console.log('[Room Broker] Subscribed to:', topic);
+
+        const activeGroup = (STATE.activeChat && STATE.activeChat.type === 'group')
+          ? STATE.groups.find(g => g.id === STATE.activeChat.id)
+          : STATE.groups[0];
+
+        // 1. Announce my presence
+        broadcastRoomPacket({
+          type: 'presence',
+          senderPeerId: STATE.myPeerId,
+          username: STATE.username,
+          avatar: STATE.avatar,
+          groupCode: roomCode,
+          groupName: activeGroup ? activeGroup.name : 'Workspace',
+          groupColor: activeGroup ? activeGroup.color : '#6C63FF',
+          groupId: activeGroup ? activeGroup.id : null
+        });
+
+        // 2. Inquire who else is currently in the room
+        broadcastRoomPacket({
+          type: 'who-is-here',
+          senderPeerId: STATE.myPeerId,
+          username: STATE.username,
+          avatar: STATE.avatar,
+          groupCode: roomCode
+        });
+      },
+      onFailure: (err) => {
+        console.debug('[Room Broker] Primary failed, using fallback:', err);
+        tryFallbackBroker(roomCode, topic, clientId);
+      }
+    });
+  } catch (e) {
+    console.debug('[Room Broker] Connect error:', e);
+  }
+}
+
+function tryFallbackBroker(roomCode, topic, clientId) {
+  try {
+    mqttClient = new Paho.MQTT.Client('broker.hivemq.com', 8884, '/mqtt', clientId);
+    mqttClient.onMessageArrived = (message) => {
+      try {
+        const packet = JSON.parse(message.payloadString);
+        if (packet && packet.senderPeerId !== STATE.myPeerId) {
+          handleIncomingData({ peer: packet.senderPeerId, open: true }, packet);
+        }
+      } catch (e) {}
+    };
+    mqttClient.connect({
+      useSSL: true,
+      timeout: 5,
+      cleanSession: true,
+      onSuccess: () => {
+        mqttClient.subscribe(topic);
+        broadcastRoomPacket({
+          type: 'who-is-here',
+          senderPeerId: STATE.myPeerId,
+          username: STATE.username,
+          avatar: STATE.avatar
+        });
+      }
+    });
+  } catch (e) {}
+}
+
+function broadcastRoomPacket(packet) {
+  packet.senderPeerId = STATE.myPeerId;
+  const jsonStr = JSON.stringify(packet);
+
+  // 1. Universal Cloud Room Broker (instant internet delivery)
+  if (mqttClient && mqttClient.isConnected() && currentMqttTopic) {
+    try {
+      const message = new Paho.MQTT.Message(jsonStr);
+      message.destinationName = currentMqttTopic;
+      mqttClient.send(message);
+    } catch (e) {}
+  }
+
+  // 2. Direct WebRTC DataChannels (low latency direct P2P)
+  STATE.connections.forEach(conn => sendPayload(conn, packet));
+
+  // 3. Local Offline Subnet Mesh (100% offline broadcast on local device/network)
+  if (localMesh) {
+    try { localMesh.postMessage(packet); } catch (e) {}
+  }
+}
+
 function initPeerSession(roomCode, desiredSlot = 0) {
   persistActiveRoom(roomCode);
   STATE.peerSlot = desiredSlot;
   STATE.connections.clear();
   STATE.knownPeers.clear();
   updatePeersUI();
+
+  // Connect to Universal Room Broker (MQTT)
+  initRoomBroker(roomCode);
 
   // Broadcast handshake on local offline channel
   announceLocalPresence();
@@ -437,8 +588,6 @@ function initPeerSession(roomCode, desiredSlot = 0) {
       STATE.peer = peer;
 
       peer.on('open', (id) => {
-        showToast(`Connected to room ${roomCode}`, '⚡️');
-        // Connect to all potential peer slots 0-7 in this room
         for (let s = 0; s < 8; s++) {
           if (s !== desiredSlot) {
             const targetId = `deskdrop-v3-${cleanRoom}-${s}`;
@@ -457,8 +606,6 @@ function initPeerSession(roomCode, desiredSlot = 0) {
     } catch (e) {
       console.debug('PeerJS init fallback to offline mesh', e);
     }
-  } else {
-    showToast('Offline Mode: Local Mesh Active', '📡');
   }
 }
 
@@ -551,12 +698,51 @@ function broadcastPayload(payload) {
 
 function handleIncomingData(conn, packet) {
   if (!packet || typeof packet !== 'object') return;
+  if (packet.senderPeerId === STATE.myPeerId) return;
 
   switch (packet.type) {
+    case 'who-is-here': {
+      const codeToMatch = packet.groupCode || STATE.roomCode;
+      const targetGroup = (codeToMatch ? STATE.groups.find(g => g.code && g.code.toUpperCase() === codeToMatch.toUpperCase()) : null)
+        || ((STATE.activeChat && STATE.activeChat.type === 'group') ? STATE.groups.find(g => g.id === STATE.activeChat.id) : STATE.groups[0]);
+
+      // Register the requesting peer immediately into knownPeers
+      const peerId = conn.peer || packet.senderPeerId;
+      if (peerId && peerId !== STATE.myPeerId && peerId !== STATE.peerId) {
+        const isNew = !STATE.knownPeers.has(peerId);
+        STATE.knownPeers.set(peerId, {
+          username: packet.username || 'Teammate',
+          avatar: packet.avatar || '',
+          groupName: targetGroup ? targetGroup.name : 'Workspace',
+          groupColor: targetGroup ? targetGroup.color : '#6C63FF',
+          status: 'online',
+          isTyping: false,
+          isNearby: false
+        });
+        updatePeersUI();
+        if (isNew) {
+          showToast(`${packet.username || 'Teammate'} joined!`, '🟢');
+          playReceivedSound();
+        }
+      }
+
+      broadcastRoomPacket({
+        type: 'presence',
+        senderPeerId: STATE.myPeerId,
+        username: STATE.username,
+        avatar: STATE.avatar,
+        groupCode: targetGroup ? targetGroup.code : STATE.roomCode,
+        groupName: targetGroup ? targetGroup.name : 'Workspace',
+        groupColor: targetGroup ? targetGroup.color : '#6C63FF',
+        groupId: targetGroup ? targetGroup.id : null
+      });
+      break;
+    }
+
     case 'local-beacon': {
-      if (packet.senderPeerId === STATE.myPeerId) break;
-      const isNew = !STATE.knownPeers.has(conn.peer);
-      STATE.knownPeers.set(conn.peer, {
+      const isNew = !STATE.knownPeers.has(conn.peer || packet.senderPeerId);
+      const peerId = conn.peer || packet.senderPeerId;
+      STATE.knownPeers.set(peerId, {
         username: packet.username || 'Nearby Device',
         avatar: packet.avatar || '',
         groupName: packet.groupName || 'Local Mesh',
@@ -567,28 +753,53 @@ function handleIncomingData(conn, packet) {
       });
       updatePeersUI();
       if (isNew) {
-        showToast(`Nearby device "${packet.username}" found on local Wi-Fi`, '📡');
+        showToast(`Nearby teammate "${packet.username}" joined local network`, '📡');
       }
       break;
     }
 
+    case 'presence':
     case 'handshake':
     case 'handshake-ack':
     case 'profile-update': {
-      STATE.knownPeers.set(conn.peer, {
+      const peerId = conn.peer || packet.senderPeerId;
+      const isNew = !STATE.knownPeers.has(peerId);
+
+      STATE.knownPeers.set(peerId, {
         username: packet.username || 'Teammate',
         avatar: packet.avatar || '',
-        groupName: packet.groupName || 'Teammate',
+        groupName: packet.groupName || 'Workspace',
         groupColor: packet.groupColor || '#6C63FF',
         status: 'online',
         isTyping: false,
         isNearby: !!packet.isNearby
       });
 
-      // Synchronize group if joined via group code
+      // Synchronize group if joined via group code: update real group name & color
       if (packet.groupCode) {
         let matchingGroup = STATE.groups.find(g => g.code && g.code.toUpperCase() === packet.groupCode.toUpperCase());
-        if (!matchingGroup) {
+        if (matchingGroup) {
+          const isCurrentPlaceholder = matchingGroup.name.startsWith('Group ') || matchingGroup.name.startsWith('Room ');
+          const isSenderValid = packet.groupName && !packet.groupName.startsWith('Group ') && !packet.groupName.startsWith('Room ');
+          if (isCurrentPlaceholder && isSenderValid) {
+            matchingGroup.name = packet.groupName;
+            matchingGroup.color = packet.groupColor || matchingGroup.color;
+            persistGroups();
+            updateGroupsUI();
+            updateLocalProfileUI();
+            if (STATE.activeChat && STATE.activeChat.type === 'group' && STATE.activeChat.code && STATE.activeChat.code.toUpperCase() === packet.groupCode.toUpperCase()) {
+              STATE.activeChat.name = packet.groupName;
+              STATE.activeChat.color = matchingGroup.color;
+              const titleEl = document.getElementById('chatTitle');
+              if (titleEl) titleEl.textContent = packet.groupName;
+              const headerChatIcon = document.getElementById('headerChatIcon');
+              if (headerChatIcon) {
+                headerChatIcon.textContent = packet.groupName.charAt(0);
+                headerChatIcon.style.background = matchingGroup.color;
+              }
+            }
+          }
+        } else {
           matchingGroup = {
             id: packet.groupId || ('group_' + Date.now()),
             name: packet.groupName || `Group ${packet.groupCode}`,
@@ -598,48 +809,20 @@ function handleIncomingData(conn, packet) {
           STATE.groups.push(matchingGroup);
           persistGroups();
           updateGroupsUI();
-        } else if (packet.groupName && (matchingGroup.name.startsWith('Group DD-') || matchingGroup.name.startsWith('Room '))) {
-          matchingGroup.name = packet.groupName;
-          matchingGroup.color = packet.groupColor || matchingGroup.color;
-          persistGroups();
-          updateGroupsUI();
+          updateLocalProfileUI();
         }
       }
 
-      // If incoming handshake, respond with handshake-ack
-      if (packet.type === 'handshake') {
-        const activeGroup = (STATE.activeChat && STATE.activeChat.type === 'group')
-          ? STATE.groups.find(g => g.id === STATE.activeChat.id)
-          : STATE.groups[0];
-
-        sendPayload(conn, {
-          type: 'handshake-ack',
-          senderPeerId: STATE.myPeerId,
-          username: STATE.username,
-          avatar: STATE.avatar,
-          groupCode: activeGroup ? activeGroup.code : STATE.roomCode,
-          groupName: activeGroup ? activeGroup.name : 'DeskDrop Workspace',
-          groupColor: activeGroup ? activeGroup.color : '#6C63FF',
-          groupId: activeGroup ? activeGroup.id : null,
-          meshPeers: Array.from(STATE.connections.keys())
-        });
-      }
-
-      // AirDrop-style full mesh gossip: connect to other peers in room so all 3+ members see each other
-      if (Array.isArray(packet.meshPeers)) {
-        packet.meshPeers.forEach(otherPeerId => {
-          if (otherPeerId && otherPeerId !== STATE.myPeerId && !STATE.connections.has(otherPeerId)) {
-            connectToPeer(otherPeerId);
-          }
-        });
-      }
-
       updatePeersUI();
+      if (isNew) {
+        showToast(`${packet.username || 'Teammate'} is online!`, '🟢');
+        playReceivedSound();
+      }
       break;
     }
 
     case 'chat-message': {
-      handleIncomingChatMessage(conn.peer, packet);
+      handleIncomingChatMessage(conn.peer || packet.senderPeerId, packet);
       break;
     }
 
@@ -668,18 +851,39 @@ function handleIncomingData(conn, packet) {
 }
 
 function handleIncomingChatMessage(fromPeerId, msg) {
-  const isDirect = msg.targetType === 'dm';
-  const chatKey = isDirect ? fromPeerId : msg.groupId;
+  if (!msg || msg.senderPeerId === STATE.myPeerId) return;
 
+  const isDirect = msg.targetType === 'dm';
+  if (isDirect) {
+    // Only accept if intended specifically for ME
+    if (msg.targetPeerId !== STATE.myPeerId) {
+      return;
+    }
+  }
+
+  // Ensure sender peer is recognized in knownPeers
+  if (!STATE.knownPeers.has(msg.senderPeerId)) {
+    STATE.knownPeers.set(msg.senderPeerId, {
+      username: msg.senderName || 'Teammate',
+      avatar: msg.senderAvatar || '',
+      groupColor: msg.senderGroupColor || '#6C63FF',
+      groupName: 'Workspace',
+      status: 'online',
+      isTyping: false
+    });
+    updatePeersUI();
+  }
+
+  const chatKey = isDirect ? msg.senderPeerId : (msg.groupId || msg.groupCode);
   saveChatMessageToHistory(chatKey, msg);
 
-  const isViewingThisChat = (isDirect && STATE.activeChat.type === 'dm' && STATE.activeChat.id === fromPeerId) ||
-                           (!isDirect && STATE.activeChat.type === 'group' && STATE.activeChat.id === msg.groupId);
+  const isViewingThisChat = (isDirect && STATE.activeChat && STATE.activeChat.type === 'dm' && STATE.activeChat.id === msg.senderPeerId) ||
+                           (!isDirect && STATE.activeChat && STATE.activeChat.type === 'group' && (STATE.activeChat.id === msg.groupId || STATE.activeChat.code === msg.groupCode));
 
   if (isViewingThisChat) {
     renderChatMessage(msg, false);
   } else {
-    showToast(`New message from ${msg.senderName}`, '💬');
+    showToast(`${msg.senderName}: ${msg.text ? msg.text.substring(0, 30) : 'Sent media'}`, '💬');
   }
 
   playReceivedSound();
@@ -969,15 +1173,7 @@ function sendTextMessage(text, msgType = 'text', mediaUrl = null) {
   };
 
   saveChatMessageToHistory(chatKey, payload);
-
-  if (isDirect) {
-    const conn = STATE.connections.get(STATE.activeChat.id);
-    if (conn) sendPayload(conn, payload);
-    if (localMesh) localMesh.postMessage(payload);
-  } else {
-    broadcastPayload(payload);
-  }
-
+  broadcastRoomPacket(payload);
   renderChatMessage(payload, true);
   playSentSound();
 }
@@ -1460,7 +1656,7 @@ function updateLocalProfileUI() {
   if (sheetHandleEl) sheetHandleEl.textContent = `@${STATE.username.toLowerCase().replace(/[^a-z0-9]/g, '')} • ${navigator.onLine ? 'Online' : 'Offline'}`;
   if (sheetItemNameEl) sheetItemNameEl.textContent = STATE.username;
   if (inputEl) inputEl.value = STATE.username;
-  if (roomSubEl) roomSubEl.textContent = `Active Room: ${STATE.roomCode}`;
+  if (roomSubEl) roomSubEl.textContent = `${STATE.groups.length} workspace${STATE.groups.length !== 1 ? 's' : ''} available`;
 
   if (STATE.avatar) {
     if (imgEl) { imgEl.src = STATE.avatar; imgEl.style.display = 'block'; }
@@ -1478,6 +1674,76 @@ function updateLocalProfileUI() {
       sheetPlaceholderEl.style.display = 'flex';
       sheetPlaceholderEl.textContent = STATE.username.substring(0, 2).toUpperCase();
     }
+  }
+
+  // Populate all workspaces/groups in Profile Settings -> Workspaces section
+  const workspacesList = document.getElementById('profileWorkspacesList');
+  if (workspacesList) {
+    workspacesList.innerHTML = '';
+    if (STATE.groups.length === 0) {
+      workspacesList.innerHTML = '<div style="font-size: 12px; color: var(--text-muted); padding: 8px 0; text-align: center;">No workspaces yet. Create one below!</div>';
+    } else {
+      STATE.groups.forEach(g => {
+        const isActive = STATE.activeChat && STATE.activeChat.type === 'group' && STATE.activeChat.id === g.id;
+        const card = document.createElement('div');
+        card.style.cssText = `
+          display: flex; align-items: center; justify-content: space-between;
+          padding: 8px 12px; border-radius: 8px;
+          background: ${isActive ? 'rgba(108, 99, 255, 0.15)' : 'rgba(255, 255, 255, 0.04)'};
+          border: 1px solid ${isActive ? 'rgba(108, 99, 255, 0.4)' : 'rgba(255, 255, 255, 0.08)'};
+          gap: 8px;
+        `;
+        card.innerHTML = `
+          <div style="display: flex; align-items: center; gap: 8px; min-width: 0; flex: 1;">
+            <span style="width: 10px; height: 10px; border-radius: 50%; background: ${g.color || 'var(--accent-indigo)'}; flex-shrink: 0;"></span>
+            <div style="min-width: 0; flex: 1;">
+              <div style="font-weight: 600; font-size: 13px; color: var(--text-normal); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${escapeHtml(g.name)}</div>
+              <div style="font-family: var(--font-mono); font-size: 10px; color: var(--text-muted);">${escapeHtml(g.code || STATE.roomCode)}</div>
+            </div>
+          </div>
+          <div style="display: flex; gap: 6px; align-items: center;">
+            <button class="btn-copy-mini" style="background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.12); color: var(--text-normal); border-radius: 6px; padding: 4px 8px; font-size: 11px; cursor: pointer;" title="Copy Code">📋 ${escapeHtml(g.code || STATE.roomCode)}</button>
+            ${isActive 
+              ? `<span style="font-size: 11px; color: var(--accent-emerald); font-weight: 600; padding: 4px 8px;">Active</span>` 
+              : `<button class="btn-switch-group" style="background: var(--accent-indigo); border: none; color: #fff; border-radius: 6px; padding: 4px 8px; font-size: 11px; cursor: pointer;">Open</button>`}
+          </div>
+        `;
+
+        const copyBtn = card.querySelector('.btn-copy-mini');
+        if (copyBtn) {
+          copyBtn.onclick = (e) => {
+            e.stopPropagation();
+            navigator.clipboard.writeText(g.code || STATE.roomCode).then(() => {
+              showToast(`Group code ${g.code || STATE.roomCode} copied!`, '📋');
+            });
+          };
+        }
+
+        const switchBtn = card.querySelector('.btn-switch-group');
+        if (switchBtn) {
+          switchBtn.onclick = (e) => {
+            e.stopPropagation();
+            switchActiveChat({ type: 'group', id: g.id, name: g.name, color: g.color, code: g.code });
+            const profModal = document.getElementById('profileModal');
+            if (profModal) profModal.classList.remove('open');
+            showToast(`Switched to ${g.name}`, '👥');
+          };
+        }
+
+        workspacesList.appendChild(card);
+      });
+    }
+  }
+
+  const btnProfileNewGroup = document.getElementById('btnProfileNewGroup');
+  if (btnProfileNewGroup) {
+    btnProfileNewGroup.onclick = () => {
+      const profModal = document.getElementById('profileModal');
+      if (profModal) profModal.classList.remove('open');
+      const grpModal = document.getElementById('groupModal');
+      if (grpModal) grpModal.classList.add('open');
+      document.getElementById('tabCreateGroup')?.click();
+    };
   }
 }
 
@@ -1627,7 +1893,9 @@ function updatePeersUI() {
   const notice = document.getElementById('emptyPeersNotice');
   if (!container) return;
 
-  const count = STATE.connections.size;
+  // Filter out self
+  const validPeers = Array.from(STATE.knownPeers.entries()).filter(([id]) => id !== STATE.peerId && id !== STATE.myPeerId);
+  const count = validPeers.length;
   if (badge) badge.textContent = `${count} active`;
 
   if (count === 0) {
@@ -1643,15 +1911,7 @@ function updatePeersUI() {
     if (ch !== notice) ch.remove();
   });
 
-  STATE.connections.forEach((conn, peerId) => {
-    const peer = STATE.knownPeers.get(peerId) || {
-      username: 'Teammate',
-      avatar: '',
-      groupColor: '#6C63FF',
-      groupName: 'Main Workspace',
-      isNearby: false
-    };
-
+  validPeers.forEach(([peerId, peer]) => {
     const isActive = STATE.activeChat && STATE.activeChat.type === 'dm' && STATE.activeChat.id === peerId;
     const item = document.createElement('div');
     item.className = `peer-nav-item ${isActive ? 'active' : ''}`;
@@ -1659,18 +1919,18 @@ function updatePeersUI() {
       <div class="peer-avatar-wrapper">
         ${peer.avatar
           ? `<img src="${escapeHtml(peer.avatar)}" class="peer-avatar" alt="Peer">`
-          : `<div class="peer-avatar">${escapeHtml(peer.username.substring(0, 2).toUpperCase())}</div>`
+          : `<div class="peer-avatar">${escapeHtml((peer.username || 'T').substring(0, 2).toUpperCase())}</div>`
         }
         <span class="peer-status-dot"></span>
       </div>
       <div class="peer-details">
         <div class="peer-name-row">
-          <span class="member-group-dot" style="background: ${peer.groupColor}; color: ${peer.groupColor};" title="Group: ${escapeHtml(peer.groupName)}"></span>
-          <span class="peer-name">${escapeHtml(peer.username)}</span>
+          <span class="member-group-dot" style="background: ${peer.groupColor || '#6C63FF'}; color: ${peer.groupColor || '#6C63FF'};" title="Group: ${escapeHtml(peer.groupName || 'Workspace')}"></span>
+          <span class="peer-name">${escapeHtml(peer.username || 'Teammate')}</span>
           ${peer.isNearby ? `<span class="nearby-mesh-tag">⚡️ Nearby</span>` : ''}
         </div>
         <div class="peer-meta">
-          <span>1-on-1 P2P</span>
+          <span>Direct Message</span>
           ${peer.isTyping ? `
             <span class="typing-indicator-inline">
               <span class="typing-dot"></span>
@@ -1682,7 +1942,7 @@ function updatePeersUI() {
     `;
 
     item.onclick = () => {
-      switchActiveChat({ type: 'dm', id: peerId, name: peer.username, color: peer.groupColor });
+      switchActiveChat({ type: 'dm', id: peerId, name: peer.username || 'Teammate', color: peer.groupColor || '#6C63FF' });
     };
 
     // Right-Click Context Menu for Deletion
@@ -1959,6 +2219,7 @@ function setupEventHandlers() {
     STATE.groups.push(newGroup);
     persistGroups();
     updateGroupsUI();
+    updateLocalProfileUI();
     switchActiveChat({ type: 'group', id: newGroup.id, name: newGroup.name, color: newGroup.color, code: newGroup.code });
     initPeerSession(code, 0);
     return newGroup;
@@ -1979,6 +2240,7 @@ function setupEventHandlers() {
       STATE.groups.push(group);
       persistGroups();
       updateGroupsUI();
+      updateLocalProfileUI();
     }
 
     switchActiveChat({ type: 'group', id: group.id, name: group.name, color: group.color, code: group.code });
@@ -2035,9 +2297,10 @@ function setupEventHandlers() {
     if (iconLetter) iconLetter.textContent = groupObj.name.charAt(0);
     if (iconBox) iconBox.style.background = groupObj.color || 'var(--accent-indigo)';
 
-    const totalMembers = STATE.connections.size + 1;
+    const validPeers = Array.from(STATE.knownPeers.entries()).filter(([id]) => id !== STATE.peerId && id !== STATE.myPeerId);
+    const totalMembers = validPeers.length + 1;
     if (subEl) subEl.textContent = `Group Channel • Code: ${groupCode}`;
-    if (countEl) countEl.textContent = `${totalMembers} connected teammate${totalMembers > 1 ? 's' : ''}`;
+    if (countEl) countEl.textContent = `${totalMembers} member${totalMembers > 1 ? 's' : ''} in room`;
 
     if (codeDisplay) codeDisplay.textContent = groupCode;
 
@@ -2091,27 +2354,47 @@ function setupEventHandlers() {
       `;
       membersList.appendChild(selfItem);
 
-      // 2. Connected Peers
-      for (const [peerId, conn] of STATE.connections.entries()) {
-        const peer = STATE.knownPeers.get(peerId) || { username: 'Teammate', avatar: '' };
-        const peerItem = document.createElement('div');
-        peerItem.className = 'group-member-item';
-        peerItem.innerHTML = `
-          <div class="group-member-avatar-box">
-            ${peer.avatar ? `<img src="${peer.avatar}" class="group-member-avatar-img" alt="${escapeHtml(peer.username)}">` : `<span>${escapeHtml(peer.username.charAt(0).toUpperCase())}</span>`}
-          </div>
-          <div class="group-member-text-col">
-            <div class="group-member-name-row">
-              <span class="group-member-name">${escapeHtml(peer.username)}</span>
-              <span class="group-member-role-badge" style="background: rgba(108, 99, 255, 0.15); color: var(--accent-indigo);">Member</span>
+      // 2. Discovered Peers / Room Members
+      if (validPeers.length === 0) {
+        const emptyNotice = document.createElement('div');
+        emptyNotice.style.cssText = 'padding: 12px; margin-top: 6px; font-size: 12px; color: var(--text-muted); text-align: center; background: rgba(255, 255, 255, 0.03); border-radius: 8px; border: 1px dashed rgba(255, 255, 255, 0.1);';
+        emptyNotice.innerHTML = `Waiting for friends to join... Share code <b style="color: var(--accent-indigo);">${escapeHtml(groupCode)}</b>`;
+        membersList.appendChild(emptyNotice);
+      } else {
+        validPeers.forEach(([peerId, peer]) => {
+          const peerItem = document.createElement('div');
+          peerItem.className = 'group-member-item';
+          peerItem.innerHTML = `
+            <div class="group-member-avatar-box">
+              ${peer.avatar ? `<img src="${peer.avatar}" class="group-member-avatar-img" alt="${escapeHtml(peer.username)}">` : `<span>${escapeHtml((peer.username || 'T').charAt(0).toUpperCase())}</span>`}
             </div>
-            <div class="group-member-status">
-              <span class="status-dot"></span>
-              <span>Online</span>
+            <div class="group-member-text-col" style="flex: 1;">
+              <div class="group-member-name-row">
+                <span class="group-member-name">${escapeHtml(peer.username || 'Teammate')}</span>
+                <span class="group-member-role-badge" style="background: rgba(108, 99, 255, 0.15); color: var(--accent-indigo);">Member</span>
+              </div>
+              <div class="group-member-status">
+                <span class="status-dot"></span>
+                <span>Online</span>
+              </div>
             </div>
-          </div>
-        `;
-        membersList.appendChild(peerItem);
+            <button class="btn-member-chat" style="background: rgba(108, 99, 255, 0.2); border: 1px solid rgba(108, 99, 255, 0.4); color: #FFF; border-radius: 6px; padding: 5px 10px; font-size: 11px; cursor: pointer; display: flex; align-items: center; gap: 4px;">
+              💬 Chat
+            </button>
+          `;
+
+          const chatBtn = peerItem.querySelector('.btn-member-chat');
+          if (chatBtn) {
+            chatBtn.onclick = (e) => {
+              e.stopPropagation();
+              groupInfoModal.classList.remove('open');
+              switchActiveChat({ type: 'dm', id: peerId, name: peer.username || 'Teammate', color: peer.groupColor || '#6C63FF' });
+              showToast(`Opened private chat with ${peer.username || 'Teammate'}`, '💬');
+            };
+          }
+
+          membersList.appendChild(peerItem);
+        });
       }
     }
 
