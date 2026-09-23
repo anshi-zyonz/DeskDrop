@@ -40,6 +40,10 @@
       </div>
 
       <div class="titlebar-actions">
+        <button class="btn-native-airdrop" id="btnTitlebarNativeAirDrop" title="Share via macOS System AirDrop">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"/><polyline points="16 6 12 2 8 6"/><line x1="12" y1="2" x2="12" y2="15"/></svg>
+          <span>macOS AirDrop</span>
+        </button>
         <button class="btn-notification-prompt" id="btnEnableNotifications" style="display: none;">
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path><path d="M13.73 21a2 2 0 0 1-3.46 0"></path></svg>
           <span>Enable Notifications</span>
@@ -69,6 +73,19 @@
           </button>
         </div>
 
+        <!-- Mode Switcher: AirDrop Radar vs Chat & Groups -->
+        <div class="sidebar-mode-switcher">
+          <button class="mode-switch-btn active" id="btnSideAirDrop" title="Switch to AirDrop Radar">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2zm0 18a8 8 0 1 1 8-8 8 8 0 0 1-8 8z"/><path d="M12 6a6 6 0 1 0 6 6 6 6 0 0 0-6-6zm0 10a4 4 0 1 1 4-4 4 4 0 0 1-4 4z"/><circle cx="12" cy="12" r="2"/></svg>
+            <span>AirDrop Radar</span>
+            <span class="mode-live-pill" id="sideRadarPeerCount">0</span>
+          </button>
+          <button class="mode-switch-btn" id="btnSideChat" title="Switch to Chat & Workspaces">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+            <span>Chat &amp; Files</span>
+          </button>
+        </div>
+
         <!-- Sidebar Navigation Sections (Groups & 1-on-1 Direct Messages) -->
         <div class="sidebar-scroll-area">
           <!-- Workspaces & Groups -->
@@ -95,8 +112,94 @@
         </div>
       </aside>
 
+      <!-- AirDrop Radar Scanning View (macOS Finder AirDrop Interface) -->
+      <main class="airdrop-radar-view finder-airdrop-view" id="airdropRadarArea">
+        <!-- Top Finder-Grade Toolbar with Network Clustering & Actions -->
+        <div class="radar-top-toolbar finder-radar-toolbar">
+          <div class="radar-toolbar-left">
+            <div class="radar-net-pill" id="radarNetPill">
+              <span class="radar-net-dot"></span>
+              <span id="radarNetLabel">Local Wi-Fi Network</span>
+            </div>
+          </div>
+
+          <div class="radar-toolbar-right">
+            <div class="radar-room-pill" id="radarRoomPill" style="display: none;">
+              <span class="radar-room-code" id="radarActiveRoomDisplay">DD-ROOM</span>
+            </div>
+            <button class="btn-change-room-code" id="btnRadarChangeCode" title="Pair with friends on another network">Pair via Code</button>
+            <button class="btn-copy-room-link" id="btnRadarCopyLink" title="Copy Invite Link">🔗 Share Link</button>
+            <div class="radar-status-indicator">
+              <span class="radar-status-dot pulse"></span>
+              <span class="radar-status-text" id="radarStatusText">Scanning for nearby devices...</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Radar Canvas & Anti-Gravity Floating Stage -->
+        <div class="radar-stage finder-airdrop-canvas" id="radarStage">
+          <!-- Current Identity Profile (Top-Left Anchor) -->
+          <div class="finder-identity-anchor" id="finderIdentityAnchor">
+            <div class="identity-avatar-wrap">
+              <img src="" alt="Me" id="finderIdentityAvatarImg" style="display: none;">
+              <span id="finderIdentityPlaceholder">ME</span>
+              <span class="identity-active-badge" title="Active on DeskDrop"></span>
+            </div>
+            <div class="identity-info-col">
+              <span class="identity-sub-label">Use DeskDrop as</span>
+              <span class="identity-name-label" id="finderIdentityName">MacBook Pro</span>
+            </div>
+          </div>
+
+          <!-- Subtle Expanding Sonar Rings (macOS Finder style) -->
+          <div class="radar-sonar-circle ring-1"></div>
+          <div class="radar-sonar-circle ring-2"></div>
+          <div class="radar-sonar-circle ring-3"></div>
+          <div class="radar-sonar-circle ring-4"></div>
+          <div class="radar-sweep-beam"></div>
+
+          <!-- Anti-Gravity Floating Peer Bubbles Container (Populated by app.js) -->
+          <div class="radar-peers-container" id="radarPeersContainer"></div>
+
+          <!-- Empty State (Exact macOS Finder AirDrop Copy) -->
+          <div class="radar-empty-state finder-empty-state" id="radarEmptyState">
+            <h2 class="finder-empty-title">No People Found</h2>
+            <p class="finder-empty-sub">There is no one nearby to share with.</p>
+            <button class="btn-secondary" id="btnRadarInviteFriends" style="margin-top: 14px; font-size: 12px; padding: 7px 16px; border-radius: 8px;">
+              📋 Copy Room Invite Link
+            </button>
+          </div>
+        </div>
+
+        <!-- macOS Finder Status Footer -->
+        <footer class="radar-footer finder-airdrop-footer">
+          <div class="finder-footer-copy">
+            DeskDrop lets you share instantly with people nearby.
+          </div>
+
+          <div class="finder-discovery-control">
+            <span class="discovery-label">Allow me to be discovered by:</span>
+            <div class="radar-visibility-pill" id="radarVisibilityPill">
+              <button class="visibility-btn active" id="btnVisDiscoverable" title="Discoverable to everyone nearby">
+                <span class="vis-dot green"></span>
+                <span>Discoverable</span>
+              </button>
+              <button class="visibility-btn" id="btnVisInvisible" title="Hidden from radar">
+                <span class="vis-dot gray"></span>
+                <span>Invisible</span>
+              </button>
+            </div>
+          </div>
+
+          <button class="btn-footer-native-airdrop" id="btnFooterNativeAirDrop">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"/><polyline points="16 6 12 2 8 6"/><line x1="12" y1="15" x2="12" y2="15"/></svg>
+            <span>macOS AirDrop Share</span>
+          </button>
+        </footer>
+      </main>
+
       <!-- Main Chat Area -->
-      <main class="main-chat" id="mainChatArea">
+      <main class="main-chat" id="mainChatArea" style="display: none;">
         <!-- Chat Header (Clickable for WhatsApp-style Group Info menu) -->
         <header class="chat-header">
           <div class="chat-header-info clickable-header" id="chatHeaderClickArea" title="Click for details & wallpaper">
@@ -699,32 +802,23 @@
         </div>
       </div>
 
-      <!-- Step 4: Create or Join a Group -->
+      <!-- Step 4: Discover People (AirDrop Radar) -->
       <div class="onboarding-step-content" id="onboardingStep4" style="display: none;">
-        <div class="onboarding-icon-bubble" style="background: rgba(108, 99, 255, 0.2); color: var(--accent-indigo);">
-          <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg>
+        <div class="onboarding-icon-bubble" style="background: rgba(78, 205, 196, 0.2); color: var(--accent-teal);">
+          <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2zm0 18a8 8 0 1 1 8-8 8 8 0 0 1-8 8z"/><path d="M12 6a6 6 0 1 0 6 6 6 6 0 0 0-6-6zm0 10a4 4 0 1 1 4-4 4 4 0 0 1-4 4z"/><circle cx="12" cy="12" r="2"/></svg>
         </div>
 
-        <h2 class="onboarding-title">Create or Join a Group</h2>
-        <p class="onboarding-desc">Start your first group workspace or connect using a friend's room code.</p>
+        <h2 class="onboarding-title">Discover People Nearby</h2>
+        <p class="onboarding-desc">
+          DeskDrop uses AirDrop-style local radar discovery. Other devices on your local Wi-Fi will appear automatically on your radar without typing any room codes.
+        </p>
 
-        <div class="drawer-tabs" style="margin-bottom: 12px;">
-          <button class="drawer-tab-btn active" id="onboardingTabCreate">Create Group</button>
-          <button class="drawer-tab-btn" id="onboardingTabJoin">Join Group</button>
-        </div>
-
-        <!-- Create Pane -->
-        <div id="onboardingCreateGroupPane">
-          <input type="text" id="onboardingGroupNameInput" class="onboarding-input" placeholder="Group Name (e.g. Project Alpha, Friends)">
-          <div class="color-swatches" id="onboardingColorSwatches" style="margin-top: 10px; justify-content: center;"></div>
-        </div>
-
-        <!-- Join Pane -->
-        <div id="onboardingJoinGroupPane" style="display: none;">
-          <input type="text" id="onboardingJoinCodeInput" class="onboarding-input" placeholder="Room Code (e.g. BWZ-98)">
-          <div style="font-size: 11px; color: var(--text-tertiary); text-align: center; margin-top: 6px;">
-            Ask a friend for their active room code to join their workspace.
+        <div style="background: rgba(255, 255, 255, 0.04); border: 1px solid var(--glass-border); border-radius: 12px; padding: 14px 18px; margin: 16px 0; display: flex; align-items: center; justify-content: space-between;">
+          <div style="display: flex; flex-direction: column; text-align: left;">
+            <span style="font-size: 13px; font-weight: 600; color: #FFF;">Make Device Discoverable</span>
+            <span style="font-size: 11px; color: var(--text-tertiary); margin-top: 2px;">Allow nearby teammates on this Wi-Fi to find you</span>
           </div>
+          <input type="checkbox" id="onboardingDiscoverableCheck" checked style="accent-color: var(--accent-teal); width: 20px; height: 20px; cursor: pointer;">
         </div>
 
         <div class="onboarding-footer">
@@ -769,6 +863,67 @@
       <span id="contextMenuDeleteLabel">Delete</span>
     </div>
   </div>
+
+  <!-- Quick Room Code Change Popover/Modal -->
+  <div class="modal-overlay" id="roomCodeModal">
+    <div class="modal-card room-code-modal-card">
+      <div class="modal-header">
+        <h3 class="modal-title">Enter Room Code</h3>
+        <button class="btn-modal-close" id="btnCloseRoomCodeModal">✕</button>
+      </div>
+      <p class="modal-sub">
+        Connect with nearby teammates by entering their room code. Everyone in this room code can discover each other like AirDrop.
+      </p>
+      <div class="modal-input-group" style="margin: 16px 0;">
+        <input type="text" id="inputCustomRoomCode" class="settings-input" placeholder="e.g. ALPHA, BWZ-98, TEAM" maxlength="16" style="font-family: var(--font-mono); text-transform: uppercase; font-size: 16px; letter-spacing: 2px; text-align: center; width: 100%;">
+      </div>
+      <div class="modal-actions-row">
+        <button class="btn-secondary" id="btnGenerateRandomCode">🎲 Random</button>
+        <button class="btn-primary" id="btnApplyRoomCode">Connect &amp; Scan →</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- macOS AirDrop File Transfer Acceptance Sheet -->
+  <div class="modal-overlay" id="airdropAcceptModal">
+    <div class="modal-card airdrop-accept-card">
+      <div class="airdrop-accept-icon-ring">
+        <svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2zm0 18a8 8 0 1 1 8-8 8 8 0 0 1-8 8z"/><circle cx="12" cy="12" r="3"/></svg>
+      </div>
+      <h3 class="airdrop-accept-title" id="airdropPromptTitle">AirDrop from Teammate</h3>
+      <p class="airdrop-accept-desc" id="airdropPromptDesc">
+        Would you like to receive <b>"Document.pdf"</b> (2.4 MB)?
+      </p>
+      <div class="modal-actions-row" style="margin-top: 20px;">
+        <button class="btn-secondary" id="btnDeclineAirDrop" style="flex: 1;">Decline</button>
+        <button class="btn-primary" id="btnAcceptAirDrop" style="flex: 1;">Accept &amp; Save</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- macOS AirDrop Connection Request Handshake Sheet -->
+  <div class="modal-overlay" id="connectionRequestModal">
+    <div class="modal-card airdrop-connect-card">
+      <div class="airdrop-connect-avatar-ring">
+        <img src="" alt="Requester" id="connectPromptAvatar" style="display: none;">
+        <span id="connectPromptPlaceholder">ME</span>
+      </div>
+      <div class="airdrop-device-type-tag" id="connectPromptDevice">MacBook Pro</div>
+      <h3 class="airdrop-accept-title" id="connectPromptTitle">Alex wants to connect</h3>
+      <p class="airdrop-accept-desc" id="connectPromptDesc">
+        Accepting will open a direct secure channel for chatting and instant file drops.
+      </p>
+      <div class="modal-actions-row" style="margin-top: 20px;">
+        <button class="btn-secondary" id="btnDeclineConnect" style="flex: 1;">Decline</button>
+        <button class="btn-primary" id="btnAcceptConnect" style="flex: 1;">Accept &amp; Connect</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Hidden File Input for AirDrop Radar Device Clicks -->
+  <input type="file" id="airdropTargetFileInput" multiple style="display: none;">
+  <!-- Hidden File Input for Native macOS AirDrop Share -->
+  <input type="file" id="nativeShareFileInput" multiple style="display: none;">
 
   <!-- Toast Notification Container -->
   <div class="toast-container" id="toastContainer"></div>

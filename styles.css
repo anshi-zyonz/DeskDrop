@@ -2172,3 +2172,935 @@ body {
   gap: 3px;
   font-weight: 500;
 }
+
+/* ==========================================================================
+   AIRDROP RADAR SYSTEM & macOS GLASSMORPHISM AESTHETICS
+   ========================================================================== */
+
+/* Mode Switcher in Sidebar */
+.sidebar-mode-switcher {
+  display: flex;
+  background: rgba(0, 0, 0, 0.25);
+  border: 1px solid var(--glass-border-subtle);
+  border-radius: 10px;
+  padding: 3px;
+  margin: 10px 14px 6px 14px;
+  gap: 4px;
+}
+
+.mode-switch-btn {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 7px 10px;
+  border-radius: 8px;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.mode-switch-btn:hover {
+  color: var(--text-primary);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.mode-switch-btn.active {
+  background: rgba(108, 99, 255, 0.25);
+  color: #FFF;
+  border: 1px solid rgba(108, 99, 255, 0.4);
+  box-shadow: 0 2px 10px rgba(108, 99, 255, 0.25);
+}
+
+.mode-live-pill {
+  font-size: 9px;
+  font-weight: 700;
+  background: var(--accent-teal);
+  color: #0b1a20;
+  padding: 1px 6px;
+  border-radius: 10px;
+  line-height: 1.2;
+}
+
+/* Native macOS AirDrop Action Buttons */
+.btn-native-airdrop {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: rgba(78, 205, 196, 0.12);
+  border: 1px solid rgba(78, 205, 196, 0.3);
+  color: var(--accent-teal);
+  border-radius: 8px;
+  padding: 5px 12px;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.btn-native-airdrop:hover {
+  background: rgba(78, 205, 196, 0.22);
+  border-color: rgba(78, 205, 196, 0.5);
+  box-shadow: 0 0 14px rgba(78, 205, 196, 0.3);
+  transform: translateY(-1px);
+}
+
+/* AirDrop Radar Main View */
+.airdrop-radar-view {
+  flex: 1;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  background: transparent;
+  overflow: hidden;
+  user-select: none;
+}
+
+/* Top Toolbar */
+.radar-top-toolbar {
+  height: 52px;
+  min-height: 52px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 24px;
+  border-bottom: 1px solid var(--glass-border-subtle);
+  background: rgba(15, 12, 41, 0.45);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  z-index: 10;
+}
+
+.radar-room-pill {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--glass-border);
+  padding: 4px 12px;
+  border-radius: 20px;
+}
+
+.radar-room-label {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.radar-room-code {
+  font-family: var(--font-mono);
+  font-weight: 700;
+  font-size: 13px;
+  color: var(--accent-mint);
+  letter-spacing: 1px;
+}
+
+.btn-change-room-code {
+  background: rgba(108, 99, 255, 0.15);
+  border: 1px solid rgba(108, 99, 255, 0.3);
+  color: var(--accent-lavender);
+  font-size: 10px;
+  padding: 2px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.btn-change-room-code:hover {
+  background: rgba(108, 99, 255, 0.3);
+  color: #FFF;
+}
+
+.btn-copy-room-link {
+  background: rgba(78, 205, 196, 0.15);
+  border: 1px solid rgba(78, 205, 196, 0.3);
+  color: var(--accent-teal);
+  font-size: 10px;
+  padding: 2px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.btn-copy-room-link:hover {
+  background: rgba(78, 205, 196, 0.3);
+  color: #FFF;
+}
+
+.radar-status-indicator {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.radar-status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent-teal);
+}
+
+.radar-status-dot.pulse {
+  box-shadow: 0 0 0 0 rgba(78, 205, 196, 0.7);
+  animation: dotPulse 1.8s infinite;
+}
+
+@keyframes dotPulse {
+  0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(78, 205, 196, 0.7); }
+  70% { transform: scale(1); box-shadow: 0 0 0 8px rgba(78, 205, 196, 0); }
+  100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(78, 205, 196, 0); }
+}
+
+.radar-status-text {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+/* ==========================================
+   13. macOS FINDER AIRDROP & ANTI-GRAVITY CANVAS
+   ========================================== */
+
+.finder-airdrop-view {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  position: relative;
+  background: transparent;
+}
+
+/* Finder-Grade Top Toolbar */
+.finder-radar-toolbar {
+  height: 50px;
+  min-height: 50px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(18, 16, 38, 0.45);
+  backdrop-filter: blur(25px);
+  -webkit-backdrop-filter: blur(25px);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 20px;
+  z-index: 10;
+}
+
+.radar-toolbar-left,
+.radar-toolbar-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+/* Local Network Clustering Pill */
+.radar-net-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: rgba(78, 205, 196, 0.1);
+  border: 1px solid rgba(78, 205, 196, 0.25);
+  padding: 4px 11px;
+  border-radius: 16px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--accent-mint);
+  letter-spacing: 0.2px;
+}
+
+.radar-net-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent-teal);
+  box-shadow: 0 0 8px var(--accent-teal);
+}
+
+/* Anti-Gravity Floating Stage */
+.finder-airdrop-canvas {
+  flex: 1;
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  backdrop-filter: blur(30px) saturate(190%);
+  -webkit-backdrop-filter: blur(30px) saturate(190%);
+}
+
+/* Current Identity Profile (Top-Left Anchor) */
+.finder-identity-anchor {
+  position: absolute;
+  top: 18px;
+  left: 20px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: rgba(255, 255, 255, 0.06);
+  backdrop-filter: blur(25px) saturate(180%);
+  -webkit-backdrop-filter: blur(25px) saturate(180%);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.25), inset 0 1px 1px rgba(255, 255, 255, 0.18);
+  padding: 7px 14px;
+  border-radius: 40px;
+  z-index: 12;
+  user-select: none;
+  pointer-events: none;
+}
+
+.identity-avatar-wrap {
+  position: relative;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  overflow: visible;
+}
+
+.identity-avatar-wrap img {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  object-fit: cover;
+}
+
+.identity-avatar-wrap span#finderIdentityPlaceholder {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: var(--grad-accent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  font-weight: 700;
+  color: #FFF;
+}
+
+.identity-active-badge {
+  position: absolute;
+  bottom: -1px;
+  right: -1px;
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  background: var(--apple-blue);
+  border: 2px solid rgba(20, 18, 44, 0.9);
+  box-shadow: 0 0 6px var(--apple-blue);
+}
+
+.identity-info-col {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.25;
+}
+
+.identity-sub-label {
+  font-size: 10px;
+  color: var(--text-tertiary);
+  font-weight: 500;
+}
+
+.identity-name-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: #FFF;
+  letter-spacing: -0.2px;
+}
+
+/* Expanding Sonar Rings with Subtle Opacity (macOS Finder style) */
+.radar-sonar-circle {
+  position: absolute;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  pointer-events: none;
+  box-shadow: inset 0 0 25px rgba(255, 255, 255, 0.015);
+}
+
+.radar-sonar-circle.ring-1 {
+  width: 220px;
+  height: 220px;
+  animation: finderRingPulse 5s infinite cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.radar-sonar-circle.ring-2 {
+  width: 400px;
+  height: 400px;
+  animation: finderRingPulse 5s infinite 1.25s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.radar-sonar-circle.ring-3 {
+  width: 580px;
+  height: 580px;
+  animation: finderRingPulse 5s infinite 2.5s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.radar-sonar-circle.ring-4 {
+  width: 760px;
+  height: 760px;
+  animation: finderRingPulse 5s infinite 3.75s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+@keyframes finderRingPulse {
+  0% {
+    border-color: rgba(255, 255, 255, 0.03);
+    box-shadow: 0 0 0 rgba(255, 255, 255, 0);
+  }
+  50% {
+    border-color: rgba(255, 255, 255, 0.1);
+    box-shadow: 0 0 30px rgba(0, 122, 255, 0.06);
+  }
+  100% {
+    border-color: rgba(255, 255, 255, 0.03);
+    box-shadow: 0 0 0 rgba(255, 255, 255, 0);
+  }
+}
+
+.radar-sweep-beam {
+  position: absolute;
+  width: 680px;
+  height: 680px;
+  border-radius: 50%;
+  background: conic-gradient(from 0deg at 50% 50%, rgba(0, 122, 255, 0.08) 0deg, rgba(0, 122, 255, 0.015) 35deg, transparent 55deg, transparent 360deg);
+  pointer-events: none;
+  animation: sweepRadar 7s linear infinite;
+}
+
+/* Finder Empty State (Exact macOS Typography) */
+.finder-empty-state {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  z-index: 4;
+  pointer-events: auto;
+}
+
+.finder-empty-title {
+  font-size: 18px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.92);
+  letter-spacing: -0.3px;
+  margin: 0 0 6px 0;
+  text-shadow: 0 2px 10px rgba(0, 0, 0, 0.5);
+}
+
+.finder-empty-sub {
+  font-size: 13px;
+  color: var(--text-tertiary);
+  margin: 0;
+  line-height: 1.4;
+}
+
+/* Anti-Gravity Floating Peer Container & Nodes */
+.radar-peers-container {
+  position: absolute;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 6;
+}
+
+.radar-peer-node {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  pointer-events: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  z-index: 6;
+  filter: drop-shadow(0 0 16px rgba(0, 122, 255, 0.28));
+  transition: filter 0.3s ease;
+  animation: peerPopIn 0.5s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+/* Zero-Gravity Floating Keyframes (Oscillation & Tilt) */
+@keyframes zeroGravityFloat {
+  0% {
+    transform: translate(-50%, -50%) translateY(0px) rotate(0deg);
+  }
+  25% {
+    transform: translate(-50%, -50%) translateY(-8px) rotate(1.2deg);
+  }
+  50% {
+    transform: translate(-50%, -50%) translateY(-2px) rotate(-0.6deg);
+  }
+  75% {
+    transform: translate(-50%, -50%) translateY(7px) rotate(-1.4deg);
+  }
+  100% {
+    transform: translate(-50%, -50%) translateY(0px) rotate(0deg);
+  }
+}
+
+.radar-peer-node.floating {
+  animation: zeroGravityFloat 5.5s ease-in-out infinite;
+}
+
+/* Glassmorphic Capsule Bubble */
+.radar-peer-card {
+  position: relative;
+  width: 82px;
+  height: 82px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.07);
+  backdrop-filter: blur(28px) saturate(190%);
+  -webkit-backdrop-filter: blur(28px) saturate(190%);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  box-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.2), 0 10px 30px rgba(0, 0, 0, 0.35);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1), box-shadow 0.3s ease, border-color 0.3s ease;
+}
+
+.radar-peer-node:hover .radar-peer-card {
+  transform: scale(1.06);
+  border-color: rgba(0, 140, 255, 0.5);
+  box-shadow: inset 0 1px 2px rgba(255, 255, 255, 0.3), 0 0 25px rgba(0, 140, 255, 0.55), 0 12px 35px rgba(0, 0, 0, 0.4);
+}
+
+.radar-peer-node:hover {
+  filter: drop-shadow(0 0 24px rgba(0, 140, 255, 0.5));
+}
+
+.radar-peer-avatar {
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--grad-accent);
+}
+
+.radar-peer-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.radar-peer-avatar span {
+  font-size: 20px;
+  font-weight: 700;
+  color: #FFF;
+}
+
+/* Device OS Badge Pinned Bottom-Right */
+.radar-peer-device-badge {
+  position: absolute;
+  bottom: -2px;
+  right: -2px;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: rgba(18, 16, 38, 0.92);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
+}
+
+.radar-peer-device-badge svg {
+  width: 12px;
+  height: 12px;
+  stroke: var(--accent-mint);
+}
+
+/* Peer Label Pill */
+.radar-peer-label-box {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  background: rgba(18, 16, 38, 0.72);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  padding: 3px 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  max-width: 150px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.3);
+}
+
+.radar-peer-name {
+  font-size: 12px;
+  font-weight: 600;
+  color: #FFF;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 130px;
+}
+
+.radar-peer-device-name {
+  font-size: 9.5px;
+  color: var(--accent-mint);
+  white-space: nowrap;
+}
+
+/* Amber Connecting State with Orbit Spinner */
+.radar-peer-node.pending-connect {
+  filter: drop-shadow(0 0 22px rgba(255, 179, 0, 0.55));
+}
+
+.radar-peer-node.pending-connect .radar-peer-card {
+  border-color: rgba(255, 179, 0, 0.85);
+  box-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.25), 0 0 28px rgba(255, 179, 0, 0.65);
+  animation: pendingAmberPulse 1.4s infinite ease-in-out;
+}
+
+@keyframes pendingAmberPulse {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.05); }
+}
+
+.pending-orbit-ring {
+  position: absolute;
+  top: -6px;
+  left: -6px;
+  right: -6px;
+  bottom: -6px;
+  border-radius: 50%;
+  border: 2px dashed rgba(255, 179, 0, 0.75);
+  animation: orbitSpin 3s linear infinite;
+  pointer-events: none;
+}
+
+@keyframes orbitSpin {
+  100% { transform: rotate(360deg); }
+}
+
+/* Electric Blue Ripple on Acceptance */
+.radar-peer-node.connected-peer .radar-peer-card {
+  border-color: rgba(48, 209, 88, 0.7);
+  box-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.25), 0 0 20px rgba(48, 209, 88, 0.4);
+}
+
+.electric-ripple-wave {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 82px;
+  height: 82px;
+  border-radius: 50%;
+  border: 2px solid var(--apple-blue);
+  box-shadow: 0 0 25px var(--apple-blue);
+  transform: translate(-50%, -50%) scale(1);
+  animation: electricRippleAnim 0.9s cubic-bezier(0.1, 0.8, 0.2, 1) forwards;
+  pointer-events: none;
+}
+
+@keyframes electricRippleAnim {
+  0% { transform: translate(-50%, -50%) scale(1); opacity: 1; }
+  100% { transform: translate(-50%, -50%) scale(2.6); opacity: 0; }
+}
+
+/* Red Decline Shake Pulse */
+.radar-peer-node.declined-pulse .radar-peer-card {
+  animation: declineShake 0.6s ease-in-out;
+  border-color: rgba(255, 69, 58, 0.85) !important;
+  box-shadow: 0 0 25px rgba(255, 69, 58, 0.6) !important;
+}
+
+@keyframes declineShake {
+  0%, 100% { transform: scale(1) translateX(0); }
+  20%, 60% { transform: scale(1.05) translateX(-4px); }
+  40%, 80% { transform: scale(1.05) translateX(4px); }
+}
+
+/* macOS Finder Status Footer */
+.finder-airdrop-footer {
+  height: 50px;
+  min-height: 50px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(18, 16, 38, 0.55);
+  backdrop-filter: blur(25px);
+  -webkit-backdrop-filter: blur(25px);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 20px;
+  z-index: 10;
+}
+
+.finder-footer-copy {
+  font-size: 11.5px;
+  color: var(--text-secondary);
+}
+
+.finder-discovery-control {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.discovery-label {
+  font-size: 11.5px;
+  color: var(--text-tertiary);
+  font-weight: 500;
+}
+
+.radar-visibility-pill {
+  display: flex;
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 16px;
+  padding: 2px;
+  gap: 2px;
+}
+
+.visibility-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 11px;
+  border-radius: 12px;
+  border: none;
+  background: transparent;
+  color: var(--text-tertiary);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.visibility-btn:hover {
+  color: var(--text-primary);
+}
+
+.visibility-btn.active {
+  background: rgba(255, 255, 255, 0.14);
+  color: #FFF;
+}
+
+.vis-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+}
+
+.vis-dot.green {
+  background: var(--apple-green);
+  box-shadow: 0 0 6px var(--apple-green);
+}
+
+.vis-dot.gray {
+  background: #8E8E93;
+}
+
+/* macOS AirDrop Acceptance Sheet */
+.airdrop-accept-card {
+  max-width: 380px;
+  text-align: center;
+  border: 1px solid rgba(78, 205, 196, 0.4);
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.6), 0 0 30px rgba(78, 205, 196, 0.2);
+  animation: sheetPop 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes sheetPop {
+  0% { transform: scale(0.92); opacity: 0; }
+  100% { transform: scale(1); opacity: 1; }
+}
+
+.airdrop-accept-icon-ring {
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  background: rgba(78, 205, 196, 0.15);
+  border: 2px solid var(--accent-teal);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0 auto 16px auto;
+  color: var(--accent-teal);
+  box-shadow: 0 0 20px rgba(78, 205, 196, 0.3);
+}
+
+.airdrop-accept-title {
+  font-size: 17px;
+  font-weight: 700;
+  color: #FFF;
+  margin-bottom: 8px;
+}
+
+.airdrop-accept-desc {
+  font-size: 13px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+.airdrop-accept-desc b {
+  color: #FFF;
+}
+
+/* Room Code Modal */
+.room-code-modal-card {
+  max-width: 400px;
+}
+
+/* Toolbar Left/Right Grouping */
+.radar-toolbar-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.radar-toolbar-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+/* Local Network Clustering Pill */
+.radar-net-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: rgba(78, 205, 196, 0.1);
+  border: 1px solid rgba(78, 205, 196, 0.25);
+  padding: 4px 10px;
+  border-radius: 16px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--accent-mint);
+}
+
+.radar-net-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent-teal);
+  box-shadow: 0 0 8px var(--accent-teal);
+}
+
+/* Visibility Mode Toggle (Discoverable vs Invisible) */
+.radar-visibility-pill {
+  display: flex;
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid var(--glass-border-subtle);
+  border-radius: 16px;
+  padding: 2px;
+  gap: 2px;
+}
+
+.visibility-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 10px;
+  border-radius: 12px;
+  border: none;
+  background: transparent;
+  color: var(--text-tertiary);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.visibility-btn:hover {
+  color: var(--text-primary);
+}
+
+.visibility-btn.active {
+  background: rgba(255, 255, 255, 0.12);
+  color: #FFF;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+}
+
+.vis-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+}
+
+.vis-dot.green {
+  background: #34D399;
+  box-shadow: 0 0 6px #34D399;
+}
+
+.vis-dot.gray {
+  background: #9CA3AF;
+}
+
+/* Two-Way Connection Request Handshake Sheet */
+.airdrop-connect-card {
+  max-width: 360px;
+  text-align: center;
+  border: 1px solid rgba(108, 99, 255, 0.4);
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.65), 0 0 35px rgba(108, 99, 255, 0.25);
+  animation: sheetPop 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.airdrop-connect-avatar-ring {
+  width: 72px;
+  height: 72px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #6C63FF, #4ECDC4);
+  border: 3px solid rgba(255, 255, 255, 0.25);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4), 0 0 25px rgba(108, 99, 255, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0 auto 10px auto;
+  overflow: hidden;
+}
+
+.airdrop-connect-avatar-ring img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.airdrop-connect-avatar-ring span {
+  font-size: 24px;
+  font-weight: 700;
+  color: #FFF;
+}
+
+.airdrop-device-type-tag {
+  display: inline-block;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--accent-mint);
+  background: rgba(78, 205, 196, 0.12);
+  border: 1px solid rgba(78, 205, 196, 0.25);
+  padding: 2px 8px;
+  border-radius: 8px;
+  margin-bottom: 10px;
+}
+
+/* Pending Connection Request Ring on Radar Node */
+.radar-peer-node.pending-connect .radar-peer-card {
+  border-color: var(--accent-indigo);
+  animation: pendingPulse 1.2s infinite ease-in-out;
+  box-shadow: 0 0 30px rgba(108, 99, 255, 0.8);
+}
+
+.radar-peer-node.connected-peer .radar-peer-card {
+  border-color: rgba(48, 209, 88, 0.6);
+  box-shadow: 0 0 20px rgba(48, 209, 88, 0.35);
+}
+
+@keyframes pendingPulse {
+  0%, 100% { transform: scale(1); box-shadow: 0 0 15px rgba(108, 99, 255, 0.5); }
+  50% { transform: scale(1.18); box-shadow: 0 0 40px rgba(108, 99, 255, 0.9); }
+}
+
+

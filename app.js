@@ -145,8 +145,36 @@ function generateGroupCode() {
   return `DD-${code}`;
 }
 
+function detectDeviceInfo() {
+  const ua = navigator.userAgent || '';
+  let deviceType = 'mac';
+  let deviceName = 'MacBook Pro';
+
+  if (/iPhone/i.test(ua)) {
+    deviceType = 'iphone';
+    deviceName = 'iPhone';
+  } else if (/iPad/i.test(ua)) {
+    deviceType = 'ipad';
+    deviceName = 'iPad';
+  } else if (/Macintosh|Mac OS X/i.test(ua)) {
+    deviceType = 'mac';
+    deviceName = 'MacBook Pro';
+  } else if (/Windows/i.test(ua)) {
+    deviceType = 'pc';
+    deviceName = 'Windows PC';
+  } else if (/Android/i.test(ua)) {
+    deviceType = 'mobile';
+    deviceName = 'Android Device';
+  } else if (/Linux/i.test(ua)) {
+    deviceType = 'pc';
+    deviceName = 'Linux PC';
+  }
+  return { deviceType, deviceName };
+}
+
 function loadStoredState() {
-  const savedUsername = localStorage.getItem('deskdrop_username') || `Mac_${Math.floor(100 + Math.random() * 900)}`;
+  const devInfo = detectDeviceInfo();
+  const savedUsername = localStorage.getItem('deskdrop_username') || `${devInfo.deviceName.split(' ')[0]}_${Math.floor(100 + Math.random() * 900)}`;
   const savedAvatar = localStorage.getItem('deskdrop_avatar') || '';
   const savedRoom = localStorage.getItem('deskdrop_active_room') || 'BWZ-98';
   const savedWallpaper = localStorage.getItem('deskdrop_wallpaper') || '';
@@ -159,6 +187,17 @@ function loadStoredState() {
     if (rawGroups) savedGroups = JSON.parse(rawGroups);
   } catch (e) {
     savedGroups = [];
+  }
+
+  // Ensure default group exists
+  if (savedGroups.length === 0) {
+    savedGroups.push({
+      id: 'group_default',
+      name: 'Main Workspace',
+      color: '#6C63FF',
+      code: savedRoom
+    });
+    localStorage.setItem('deskdrop_groups', JSON.stringify(savedGroups));
   }
 
   // Ensure each group has a unique room code
@@ -184,20 +223,32 @@ function loadStoredState() {
     }
   } catch (e) {}
 
+  // Generate guaranteed unique collision-proof peer IDs for this tab session
+  const randomSuffix = Math.random().toString(36).substr(2, 7) + Date.now().toString(36).substr(-4);
+  const myPeerId = `dd_${randomSuffix}`;
+  const myPeerJsId = `ddjs_${randomSuffix}`;
+
   return {
     username: savedUsername,
     avatar: savedAvatar,
     roomCode: savedRoom,
+    deviceType: devInfo.deviceType,
+    deviceName: devInfo.deviceName,
     wallpaper: savedWallpaper,
     wallpaperOpacity: savedOpacity,
     wallpaperBlur: savedBlur,
     groups: savedGroups,
     activeChat: savedActiveChat,
+    activeAppMode: 'radar', // 'radar' or 'chat'
+    visibilityMode: localStorage.getItem('deskdrop_visibility') || 'discoverable',
+    subnetHash: 'net_local_wifi',
     peerSlot: 0,
-    myPeerId: 'peer_' + Math.random().toString(36).substr(2, 9),
+    myPeerId: myPeerId,
+    myPeerJsId: myPeerJsId,
     peer: null,
-    connections: new Map(), // peerId -> DataConnection
-    knownPeers: new Map(), // peerId -> { username, avatar, groupColor, groupName, status, isTyping }
+    connections: new Map(), // peerJsId/peerId -> DataConnection
+    knownPeers: new Map(), // peerId -> { peerId, peerJsId, username, avatar, deviceType, deviceName, status, lastSeen, isNearby }
+    pendingConnectionRequests: new Map(), // requestId -> { targetPeerId, targetPeer, sentAt }
     activeTransfers: new Map(),
     typingTimeout: null,
     isTyping: false
@@ -400,34 +451,129 @@ function sanitizeRoomCode(raw) {
 }
 
 // ==========================================
-// 5. WEBRTC P2P SESSION & OFFLINE DUAL-MESH
+// 5. WEBRTC P2P SESSION & MULTI-BROKER SIGNALING
 // ==========================================
+
+// Network Subnet Hashing (SnapDrop/PairDrop model for zero-config same-Wi-Fi discovery)
+function hashString(str) {
+  let hash = 5381;
+  for (let i = 0; i < str.length; i++) {
+    hash = ((hash << 5) + hash) + str.charCodeAt(i);
+    hash |= 0;
+  }
+  return Math.abs(hash).toString(36);
+}
+
+async function fetchNetworkSubnetHash() {
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 2200);
+
+    let ip = '';
+    try {
+      const res = await fetch('https://1.1.1.1/cdn-cgi/trace', { signal: controller.signal });
+      const text = await res.text();
+      const match = text.match(/ip=([^\n]+)/);
+      if (match) ip = match[1].trim();
+    } catch (e) {
+      try {
+        const res2 = await fetch('https://api.ipify.org?format=json', { signal: controller.signal });
+        const data = await res2.json();
+        if (data && data.ip) ip = data.ip.trim();
+      } catch (e2) {}
+    }
+    clearTimeout(timeoutId);
+
+    if (ip) {
+      const netHash = hashString(ip);
+      STATE.subnetHash = `net_${netHash}`;
+      const netLabel = document.getElementById('radarNetLabel');
+      if (netLabel) {
+        netLabel.textContent = `Wi-Fi Mesh (${netHash.toUpperCase()})`;
+      }
+      return STATE.subnetHash;
+    }
+  } catch (err) {
+    console.debug('[Network Clustering] Using fallback local subnet hash', err);
+  }
+  STATE.subnetHash = 'net_local_wifi';
+  const netLabel = document.getElementById('radarNetLabel');
+  if (netLabel) netLabel.textContent = 'Local Wi-Fi Network';
+  return STATE.subnetHash;
+}
+
+// Discoverability Modes ('discoverable' | 'invisible')
+function setDiscoverabilityMode(mode) {
+  if (mode !== 'discoverable' && mode !== 'invisible') return;
+  STATE.visibilityMode = mode;
+  localStorage.setItem('deskdrop_visibility', mode);
+
+  const btnDisc = document.getElementById('btnVisDiscoverable');
+  const btnInvis = document.getElementById('btnVisInvisible');
+
+  if (mode === 'discoverable') {
+    btnDisc?.classList.add('active');
+    btnInvis?.classList.remove('active');
+    broadcastPresenceBeacon();
+    showToast('You are now Discoverable on the radar', '🟢');
+  } else {
+    btnInvis?.classList.add('active');
+    btnDisc?.classList.remove('active');
+    broadcastRoomPacket({
+      type: 'presence-departed',
+      senderPeerId: STATE.myPeerId
+    });
+    showToast('You are now Invisible to nearby devices', '👻');
+  }
+
+  const onboardingCb = document.getElementById('onboardingDiscoverableCheck');
+  if (onboardingCb) {
+    onboardingCb.checked = (mode === 'discoverable');
+  }
+}
 
 // Universal Room Broker (MQTT over Secure WebSocket)
 let mqttClient = null;
-let currentMqttTopic = null;
+let currentRoomTopic = null;
+let currentSubnetTopic = null;
+
+function broadcastPresenceBeacon() {
+  if (STATE.visibilityMode === 'invisible') {
+    return;
+  }
+
+  const activeGroup = (STATE.activeChat && STATE.activeChat.type === 'group')
+    ? STATE.groups.find(g => g.id === STATE.activeChat.id)
+    : STATE.groups[0];
+
+  const beacon = {
+    type: 'presence',
+    senderPeerId: STATE.myPeerId,
+    peerJsId: STATE.myPeerJsId,
+    username: STATE.username,
+    avatar: STATE.avatar,
+    deviceType: STATE.deviceType,
+    deviceName: STATE.deviceName,
+    groupCode: STATE.roomCode,
+    groupName: activeGroup ? activeGroup.name : 'Workspace',
+    groupColor: activeGroup ? activeGroup.color : '#6C63FF',
+    groupId: activeGroup ? activeGroup.id : null,
+    isNearby: true,
+    timestamp: Date.now()
+  };
+
+  broadcastRoomPacket(beacon);
+}
 
 function initRoomBroker(roomCode) {
   if (typeof Paho === 'undefined' || !Paho.MQTT || !navigator.onLine) return;
 
   const cleanRoom = sanitizeRoomCode(roomCode).toUpperCase().replace(/[^A-Z0-9]/g, '');
-  const topic = `deskdrop/v3/room/${cleanRoom}`;
+  const roomTopic = `deskdrop/v3/room/${cleanRoom}`;
+  const subnetTopic = STATE.subnetHash ? `deskdrop/v3/subnet/${STATE.subnetHash}` : null;
 
-  if (mqttClient && mqttClient.isConnected() && currentMqttTopic === topic) {
-    const activeGroup = (STATE.activeChat && STATE.activeChat.type === 'group')
-      ? STATE.groups.find(g => g.id === STATE.activeChat.id)
-      : STATE.groups[0];
-
-    broadcastRoomPacket({
-      type: 'presence',
-      senderPeerId: STATE.myPeerId,
-      username: STATE.username,
-      avatar: STATE.avatar,
-      groupCode: roomCode,
-      groupName: activeGroup ? activeGroup.name : 'Workspace',
-      groupColor: activeGroup ? activeGroup.color : '#6C63FF',
-      groupId: activeGroup ? activeGroup.id : null
-    });
+  if (mqttClient && mqttClient.isConnected() && currentRoomTopic === roomTopic && currentSubnetTopic === subnetTopic) {
+    broadcastPresenceBeacon();
     return;
   }
 
@@ -435,7 +581,8 @@ function initRoomBroker(roomCode) {
     try { mqttClient.disconnect(); } catch (e) {}
   }
 
-  currentMqttTopic = topic;
+  currentRoomTopic = roomTopic;
+  currentSubnetTopic = subnetTopic;
   const clientId = `dd_${STATE.myPeerId.replace(/[^a-zA-Z0-9]/g, '')}_${Math.floor(Math.random() * 10000)}`;
 
   try {
@@ -444,7 +591,7 @@ function initRoomBroker(roomCode) {
     mqttClient.onConnectionLost = (res) => {
       console.debug('[Room Broker] Disconnected:', res.errorMessage);
       setTimeout(() => {
-        if (currentMqttTopic === topic) initRoomBroker(roomCode);
+        if (currentRoomTopic === roomTopic) initRoomBroker(roomCode);
       }, 4000);
     };
 
@@ -463,37 +610,30 @@ function initRoomBroker(roomCode) {
       keepAliveInterval: 30,
       cleanSession: true,
       onSuccess: () => {
-        mqttClient.subscribe(topic);
-        console.log('[Room Broker] Subscribed to:', topic);
+        mqttClient.subscribe(roomTopic);
+        if (subnetTopic && subnetTopic !== roomTopic) {
+          mqttClient.subscribe(subnetTopic);
+        }
+        console.log('[Room Broker] Subscribed to:', roomTopic, 'and subnet:', subnetTopic);
 
-        const activeGroup = (STATE.activeChat && STATE.activeChat.type === 'group')
-          ? STATE.groups.find(g => g.id === STATE.activeChat.id)
-          : STATE.groups[0];
+        // 1. Announce presence
+        broadcastPresenceBeacon();
 
-        // 1. Announce my presence
-        broadcastRoomPacket({
-          type: 'presence',
-          senderPeerId: STATE.myPeerId,
-          username: STATE.username,
-          avatar: STATE.avatar,
-          groupCode: roomCode,
-          groupName: activeGroup ? activeGroup.name : 'Workspace',
-          groupColor: activeGroup ? activeGroup.color : '#6C63FF',
-          groupId: activeGroup ? activeGroup.id : null
-        });
-
-        // 2. Inquire who else is currently in the room
+        // 2. Inquire who is in the room
         broadcastRoomPacket({
           type: 'who-is-here',
           senderPeerId: STATE.myPeerId,
+          peerJsId: STATE.myPeerJsId,
           username: STATE.username,
           avatar: STATE.avatar,
-          groupCode: roomCode
+          deviceType: STATE.deviceType,
+          deviceName: STATE.deviceName,
+          groupCode: STATE.roomCode
         });
       },
       onFailure: (err) => {
         console.debug('[Room Broker] Primary failed, using fallback:', err);
-        tryFallbackBroker(roomCode, topic, clientId);
+        tryFallbackBroker(roomCode, roomTopic, subnetTopic, clientId);
       }
     });
   } catch (e) {
@@ -501,7 +641,7 @@ function initRoomBroker(roomCode) {
   }
 }
 
-function tryFallbackBroker(roomCode, topic, clientId) {
+function tryFallbackBroker(roomCode, roomTopic, subnetTopic, clientId) {
   try {
     mqttClient = new Paho.MQTT.Client('broker.hivemq.com', 8884, '/mqtt', clientId);
     mqttClient.onMessageArrived = (message) => {
@@ -517,12 +657,20 @@ function tryFallbackBroker(roomCode, topic, clientId) {
       timeout: 5,
       cleanSession: true,
       onSuccess: () => {
-        mqttClient.subscribe(topic);
+        mqttClient.subscribe(roomTopic);
+        if (subnetTopic && subnetTopic !== roomTopic) {
+          mqttClient.subscribe(subnetTopic);
+        }
+        broadcastPresenceBeacon();
         broadcastRoomPacket({
           type: 'who-is-here',
           senderPeerId: STATE.myPeerId,
+          peerJsId: STATE.myPeerJsId,
           username: STATE.username,
-          avatar: STATE.avatar
+          avatar: STATE.avatar,
+          deviceType: STATE.deviceType,
+          deviceName: STATE.deviceName,
+          groupCode: STATE.roomCode
         });
       }
     });
@@ -531,32 +679,41 @@ function tryFallbackBroker(roomCode, topic, clientId) {
 
 function broadcastRoomPacket(packet) {
   packet.senderPeerId = STATE.myPeerId;
+  if (!packet.peerJsId) packet.peerJsId = STATE.myPeerJsId;
   const jsonStr = JSON.stringify(packet);
 
-  // 1. Universal Cloud Room Broker (instant internet delivery)
-  if (mqttClient && mqttClient.isConnected() && currentMqttTopic) {
+  // 1. Universal Cloud Room Broker (instant delivery over internet)
+  if (mqttClient && mqttClient.isConnected()) {
     try {
-      const message = new Paho.MQTT.Message(jsonStr);
-      message.destinationName = currentMqttTopic;
-      mqttClient.send(message);
+      if (currentRoomTopic) {
+        const msgRoom = new Paho.MQTT.Message(jsonStr);
+        msgRoom.destinationName = currentRoomTopic;
+        mqttClient.send(msgRoom);
+      }
+      if (currentSubnetTopic && currentSubnetTopic !== currentRoomTopic) {
+        const msgSubnet = new Paho.MQTT.Message(jsonStr);
+        msgSubnet.destinationName = currentSubnetTopic;
+        mqttClient.send(msgSubnet);
+      }
     } catch (e) {}
   }
 
-  // 2. Direct WebRTC DataChannels (low latency direct P2P)
+  // 2. Direct WebRTC DataChannels (low latency direct P2P mesh)
   STATE.connections.forEach(conn => sendPayload(conn, packet));
 
-  // 3. Local Offline Subnet Mesh (100% offline broadcast on local device/network)
+  // 3. Local Offline Subnet Mesh (same device/tabs BroadcastChannel)
   if (localMesh) {
     try { localMesh.postMessage(packet); } catch (e) {}
   }
 }
 
-function initPeerSession(roomCode, desiredSlot = 0) {
+function initPeerSession(roomCode) {
   persistActiveRoom(roomCode);
-  STATE.peerSlot = desiredSlot;
+  STATE.roomCode = roomCode;
   STATE.connections.clear();
   STATE.knownPeers.clear();
   updatePeersUI();
+  updateRadarUI();
 
   // Connect to Universal Room Broker (MQTT)
   initRoomBroker(roomCode);
@@ -564,22 +721,19 @@ function initPeerSession(roomCode, desiredSlot = 0) {
   // Broadcast handshake on local offline channel
   announceLocalPresence();
 
-  // If online, initialize PeerJS over WebRTC
+  // If online, initialize PeerJS over WebRTC with unique ID
   if (typeof Peer !== 'undefined' && navigator.onLine) {
     if (STATE.peer && !STATE.peer.destroyed) {
       try { STATE.peer.destroy(); } catch (e) {}
     }
 
-    const cleanRoom = roomCode.toLowerCase().replace(/[^a-z0-9]/g, '');
-    const peerId = `deskdrop-v3-${cleanRoom}-${desiredSlot}`;
-    STATE.myPeerId = peerId;
-
     try {
-      const peer = new Peer(peerId, {
+      const peer = new Peer(STATE.myPeerJsId, {
         debug: 1,
         config: {
           iceServers: [
             { urls: 'stun:stun.l.google.com:19302' },
+            { urls: 'stun:stun1.l.google.com:19302' },
             { urls: 'stun:global.stun.twilio.com:3478' }
           ]
         }
@@ -588,23 +742,17 @@ function initPeerSession(roomCode, desiredSlot = 0) {
       STATE.peer = peer;
 
       peer.on('open', (id) => {
-        for (let s = 0; s < 8; s++) {
-          if (s !== desiredSlot) {
-            const targetId = `deskdrop-v3-${cleanRoom}-${s}`;
-            connectToPeer(targetId);
-          }
-        }
+        console.log('[PeerJS] Ready with ID:', id);
+        broadcastPresenceBeacon();
       });
 
       peer.on('connection', (conn) => setupDataConnection(conn));
 
       peer.on('error', (err) => {
-        if (err.type === 'unavailable-id' && desiredSlot < 8) {
-          initPeerSession(roomCode, desiredSlot + 1);
-        }
+        console.debug('[PeerJS] Error:', err);
       });
     } catch (e) {
-      console.debug('PeerJS init fallback to offline mesh', e);
+      console.debug('[PeerJS] Fallback to room broker mesh', e);
     }
   }
 }
@@ -616,23 +764,32 @@ function announceLocalPresence() {
       localMesh.postMessage({
         type: 'local-beacon',
         senderPeerId: STATE.myPeerId,
+        peerJsId: STATE.myPeerJsId,
         username: STATE.username,
         avatar: STATE.avatar,
+        deviceType: STATE.deviceType,
+        deviceName: STATE.deviceName,
         groupCode: primaryGroup.code || STATE.roomCode,
         groupName: primaryGroup.name,
         groupColor: primaryGroup.color,
-        isNearby: true
+        isNearby: true,
+        timestamp: Date.now()
       });
     } catch (e) {}
   }
 }
 
-function connectToPeer(targetPeerId) {
+function connectToPeer(targetPeerJsId) {
   if (!STATE.peer || STATE.peer.destroyed) return;
-  if (STATE.connections.has(targetPeerId)) return;
+  if (!targetPeerJsId || targetPeerJsId === STATE.myPeerJsId) return;
+  if (STATE.connections.has(targetPeerJsId)) return;
 
-  const conn = STATE.peer.connect(targetPeerId, { reliable: true, serialization: 'binary' });
-  setupDataConnection(conn);
+  try {
+    const conn = STATE.peer.connect(targetPeerJsId, { reliable: true, serialization: 'binary' });
+    setupDataConnection(conn);
+  } catch (e) {
+    console.debug('[PeerJS] Connect err:', e);
+  }
 }
 
 function setupDataConnection(conn) {
@@ -646,18 +803,21 @@ function setupDataConnection(conn) {
     sendPayload(conn, {
       type: 'handshake',
       senderPeerId: STATE.myPeerId,
+      peerJsId: STATE.myPeerJsId,
       username: STATE.username,
       avatar: STATE.avatar,
+      deviceType: STATE.deviceType,
+      deviceName: STATE.deviceName,
       groupCode: activeGroup ? activeGroup.code : STATE.roomCode,
       groupName: activeGroup ? activeGroup.name : 'DeskDrop Workspace',
       groupColor: activeGroup ? activeGroup.color : '#6C63FF',
       groupId: activeGroup ? activeGroup.id : null,
-      meshPeers: Array.from(STATE.connections.keys())
+      isNearby: true
     });
 
     updatePeersUI();
-    showToast('Teammate joined the room', '🟢');
-    playReceivedSound();
+    updateRadarUI();
+    console.log('[WebRTC] Direct connection active with:', conn.peer);
   };
 
   if (conn.open) {
@@ -670,13 +830,14 @@ function setupDataConnection(conn) {
 
   conn.on('close', () => {
     STATE.connections.delete(conn.peer);
-    STATE.knownPeers.delete(conn.peer);
     updatePeersUI();
+    updateRadarUI();
   });
 }
 
 function sendPayload(conn, payload) {
   payload.senderPeerId = STATE.myPeerId;
+  if (!payload.peerJsId) payload.peerJsId = STATE.myPeerJsId;
   if (conn && conn.open) {
     try { conn.send(payload); } catch (e) {}
   }
@@ -684,21 +845,25 @@ function sendPayload(conn, payload) {
 
 function broadcastPayload(payload) {
   payload.senderPeerId = STATE.myPeerId;
+  if (!payload.peerJsId) payload.peerJsId = STATE.myPeerJsId;
   // Send via WebRTC DataChannels
   STATE.connections.forEach(conn => sendPayload(conn, payload));
-  // Also send via local BroadcastChannel mesh (works 100% offline!)
+  // Also send via local BroadcastChannel mesh
   if (localMesh) {
     try { localMesh.postMessage(payload); } catch (e) {}
   }
 }
 
 // ==========================================
-// 6. INCOMING DATA & MESSAGE HANDLER
+// 6. INCOMING DATA & AIRDROP HANDLER
 // ==========================================
 
 function handleIncomingData(conn, packet) {
   if (!packet || typeof packet !== 'object') return;
   if (packet.senderPeerId === STATE.myPeerId) return;
+
+  const peerId = packet.senderPeerId || conn?.peer;
+  if (!peerId) return;
 
   switch (packet.type) {
     case 'who-is-here': {
@@ -706,76 +871,165 @@ function handleIncomingData(conn, packet) {
       const targetGroup = (codeToMatch ? STATE.groups.find(g => g.code && g.code.toUpperCase() === codeToMatch.toUpperCase()) : null)
         || ((STATE.activeChat && STATE.activeChat.type === 'group') ? STATE.groups.find(g => g.id === STATE.activeChat.id) : STATE.groups[0]);
 
-      // Register the requesting peer immediately into knownPeers
-      const peerId = conn.peer || packet.senderPeerId;
-      if (peerId && peerId !== STATE.myPeerId && peerId !== STATE.peerId) {
-        const isNew = !STATE.knownPeers.has(peerId);
-        STATE.knownPeers.set(peerId, {
-          username: packet.username || 'Teammate',
-          avatar: packet.avatar || '',
-          groupName: targetGroup ? targetGroup.name : 'Workspace',
-          groupColor: targetGroup ? targetGroup.color : '#6C63FF',
-          status: 'online',
-          isTyping: false,
-          isNearby: false
-        });
-        updatePeersUI();
-        if (isNew) {
-          showToast(`${packet.username || 'Teammate'} joined!`, '🟢');
-          playReceivedSound();
-        }
-      }
-
-      broadcastRoomPacket({
-        type: 'presence',
-        senderPeerId: STATE.myPeerId,
-        username: STATE.username,
-        avatar: STATE.avatar,
-        groupCode: targetGroup ? targetGroup.code : STATE.roomCode,
-        groupName: targetGroup ? targetGroup.name : 'Workspace',
-        groupColor: targetGroup ? targetGroup.color : '#6C63FF',
-        groupId: targetGroup ? targetGroup.id : null
-      });
-      break;
-    }
-
-    case 'local-beacon': {
-      const isNew = !STATE.knownPeers.has(conn.peer || packet.senderPeerId);
-      const peerId = conn.peer || packet.senderPeerId;
+      const isNew = !STATE.knownPeers.has(peerId);
       STATE.knownPeers.set(peerId, {
+        peerId,
+        peerJsId: packet.peerJsId || peerId,
         username: packet.username || 'Nearby Device',
         avatar: packet.avatar || '',
-        groupName: packet.groupName || 'Local Mesh',
-        groupColor: packet.groupColor || '#4ECDC4',
+        deviceType: packet.deviceType || 'mac',
+        deviceName: packet.deviceName || 'Apple Device',
+        groupName: targetGroup ? targetGroup.name : 'Workspace',
+        groupColor: targetGroup ? targetGroup.color : '#6C63FF',
         status: 'online',
+        lastSeen: Date.now(),
         isTyping: false,
         isNearby: true
       });
       updatePeersUI();
+      updateRadarUI();
+
       if (isNew) {
-        showToast(`Nearby teammate "${packet.username}" joined local network`, '📡');
+        showToast(`Nearby device "${packet.username || 'Device'}" found!`, '📡');
+        playReceivedSound();
+      }
+
+      // Reply with presence-ack so they discover us immediately (if discoverable)
+      if (STATE.visibilityMode !== 'invisible') {
+        broadcastRoomPacket({
+          type: 'presence-ack',
+          senderPeerId: STATE.myPeerId,
+          peerJsId: STATE.myPeerJsId,
+          username: STATE.username,
+          avatar: STATE.avatar,
+          deviceType: STATE.deviceType,
+          deviceName: STATE.deviceName,
+          groupCode: targetGroup ? targetGroup.code : STATE.roomCode,
+          groupName: targetGroup ? targetGroup.name : 'Workspace',
+          groupColor: targetGroup ? targetGroup.color : '#6C63FF',
+          groupId: targetGroup ? targetGroup.id : null,
+          isNearby: true
+        });
+      }
+
+      // Initiate WebRTC connection if our ID is alphabetically greater
+      if (STATE.peer && packet.peerJsId && STATE.myPeerId > packet.senderPeerId && !STATE.connections.has(packet.peerJsId)) {
+        connectToPeer(packet.peerJsId);
       }
       break;
     }
 
+    case 'presence-departed': {
+      if (STATE.knownPeers.has(peerId)) {
+        STATE.knownPeers.delete(peerId);
+        STATE.connections.delete(peerId);
+        updatePeersUI();
+        updateRadarUI();
+      }
+      break;
+    }
+
+    case 'connect-request': {
+      if (packet.targetPeerId !== STATE.myPeerId) return;
+      if (STATE.visibilityMode === 'invisible') return;
+      showConnectionRequestModal(packet);
+      break;
+    }
+
+    case 'connect-accepted': {
+      if (packet.targetPeerId !== STATE.myPeerId) return;
+      STATE.pendingConnectionRequests.delete(packet.senderPeerId);
+
+      // Trigger electric blue ripple wave animation on peer node if on canvas
+      const peerNode = document.querySelector(`.radar-peer-node[data-peer-id="${packet.senderPeerId}"]`);
+      if (peerNode) {
+        const wave = document.createElement('div');
+        wave.className = 'electric-ripple-wave';
+        peerNode.appendChild(wave);
+      }
+
+      let peer = STATE.knownPeers.get(packet.senderPeerId);
+      if (!peer) {
+        peer = {
+          peerId: packet.senderPeerId,
+          peerJsId: packet.peerJsId || packet.senderPeerId,
+          username: packet.username || 'Nearby Device',
+          avatar: packet.avatar || '',
+          deviceType: packet.deviceType || 'mac',
+          deviceName: packet.deviceName || 'Apple Device',
+          groupName: 'Direct Message',
+          groupColor: packet.groupColor || '#6C63FF',
+          status: 'online',
+          lastSeen: Date.now(),
+          isNearby: true
+        };
+        STATE.knownPeers.set(packet.senderPeerId, peer);
+      }
+      peer.isConnected = true;
+
+      if (packet.peerJsId && STATE.peer) {
+        connectToPeer(packet.peerJsId);
+      }
+
+      switchActiveChat({
+        type: 'dm',
+        id: packet.senderPeerId,
+        name: packet.username || 'Teammate',
+        color: packet.groupColor || '#6C63FF'
+      });
+      setAppMode('chat');
+
+      showToast(`Connected with ${packet.username || 'Peer'}! You can now chat and share files.`, '🤝');
+      playReceivedSound();
+      updateRadarUI();
+      updatePeersUI();
+      break;
+    }
+
+    case 'connect-declined': {
+      if (packet.targetPeerId !== STATE.myPeerId) return;
+      STATE.pendingConnectionRequests.delete(packet.senderPeerId);
+
+      const peerNode = document.querySelector(`.radar-peer-node[data-peer-id="${packet.senderPeerId}"]`);
+      if (peerNode) {
+        peerNode.classList.remove('pending-connect');
+        peerNode.classList.add('declined-pulse');
+        setTimeout(() => {
+          peerNode.classList.remove('declined-pulse');
+          updateRadarUI();
+        }, 1000);
+      } else {
+        updateRadarUI();
+      }
+
+      showToast(`${packet.username || 'Device'} declined the connection request.`, '✕');
+      break;
+    }
+
+    case 'local-beacon':
     case 'presence':
+    case 'presence-ack':
     case 'handshake':
     case 'handshake-ack':
     case 'profile-update': {
-      const peerId = conn.peer || packet.senderPeerId;
       const isNew = !STATE.knownPeers.has(peerId);
 
       STATE.knownPeers.set(peerId, {
-        username: packet.username || 'Teammate',
+        peerId,
+        peerJsId: packet.peerJsId || peerId,
+        username: packet.username || 'Nearby Device',
         avatar: packet.avatar || '',
+        deviceType: packet.deviceType || 'mac',
+        deviceName: packet.deviceName || 'Apple Device',
         groupName: packet.groupName || 'Workspace',
         groupColor: packet.groupColor || '#6C63FF',
         status: 'online',
+        lastSeen: Date.now(),
         isTyping: false,
-        isNearby: !!packet.isNearby
+        isNearby: true
       });
 
-      // Synchronize group if joined via group code: update real group name & color
+      // Synchronize group if joined via group code
       if (packet.groupCode) {
         let matchingGroup = STATE.groups.find(g => g.code && g.code.toUpperCase() === packet.groupCode.toUpperCase());
         if (matchingGroup) {
@@ -787,47 +1041,55 @@ function handleIncomingData(conn, packet) {
             persistGroups();
             updateGroupsUI();
             updateLocalProfileUI();
-            if (STATE.activeChat && STATE.activeChat.type === 'group' && STATE.activeChat.code && STATE.activeChat.code.toUpperCase() === packet.groupCode.toUpperCase()) {
-              STATE.activeChat.name = packet.groupName;
-              STATE.activeChat.color = matchingGroup.color;
-              const titleEl = document.getElementById('chatTitle');
-              if (titleEl) titleEl.textContent = packet.groupName;
-              const headerChatIcon = document.getElementById('headerChatIcon');
-              if (headerChatIcon) {
-                headerChatIcon.textContent = packet.groupName.charAt(0);
-                headerChatIcon.style.background = matchingGroup.color;
-              }
-            }
           }
-        } else {
-          matchingGroup = {
-            id: packet.groupId || ('group_' + Date.now()),
-            name: packet.groupName || `Group ${packet.groupCode}`,
-            color: packet.groupColor || '#6C63FF',
-            code: packet.groupCode
-          };
-          STATE.groups.push(matchingGroup);
-          persistGroups();
-          updateGroupsUI();
-          updateLocalProfileUI();
         }
       }
 
       updatePeersUI();
+      updateRadarUI();
+
       if (isNew) {
-        showToast(`${packet.username || 'Teammate'} is online!`, '🟢');
+        showToast(`Nearby device "${packet.username || 'Device'}" is ready!`, '🟢');
         playReceivedSound();
+      }
+
+      // If new peer arrived via presence, acknowledge immediately (if discoverable)
+      if (packet.type === 'presence' && STATE.visibilityMode !== 'invisible') {
+        broadcastRoomPacket({
+          type: 'presence-ack',
+          senderPeerId: STATE.myPeerId,
+          peerJsId: STATE.myPeerJsId,
+          username: STATE.username,
+          avatar: STATE.avatar,
+          deviceType: STATE.deviceType,
+          deviceName: STATE.deviceName,
+          groupCode: STATE.roomCode,
+          isNearby: true
+        });
+      }
+
+      // WebRTC connection
+      if (STATE.peer && packet.peerJsId && STATE.myPeerId > packet.senderPeerId && !STATE.connections.has(packet.peerJsId)) {
+        connectToPeer(packet.peerJsId);
+      }
+      break;
+    }
+
+    case 'heartbeat': {
+      const peer = STATE.knownPeers.get(peerId);
+      if (peer) {
+        peer.lastSeen = Date.now();
       }
       break;
     }
 
     case 'chat-message': {
-      handleIncomingChatMessage(conn.peer || packet.senderPeerId, packet);
+      handleIncomingChatMessage(peerId, packet);
       break;
     }
 
     case 'typing': {
-      const peer = STATE.knownPeers.get(conn.peer);
+      const peer = STATE.knownPeers.get(peerId);
       if (peer) {
         peer.isTyping = !!packet.isTyping;
         updatePeersUI();
@@ -836,13 +1098,15 @@ function handleIncomingData(conn, packet) {
     }
 
     case 'file-start': {
-      handleFileStart(conn.peer, packet);
+      handleFileStart(peerId, packet);
       break;
     }
+
     case 'file-chunk': {
       handleFileChunk(packet);
       break;
     }
+
     case 'file-end': {
       handleFileEnd(packet);
       break;
@@ -1297,7 +1561,7 @@ function switchActiveChat(target) {
     const cleanCurrent = (STATE.roomCode || '').toUpperCase();
     const cleanTarget = (groupCode || '').toUpperCase();
     if (cleanTarget && cleanCurrent !== cleanTarget) {
-      initPeerSession(cleanTarget, 0);
+      initPeerSession(cleanTarget);
     }
   } else {
     const peer = STATE.knownPeers.get(target.id) || { username: target.name, avatar: '' };
@@ -1957,10 +2221,588 @@ function updatePeersUI() {
 }
 
 // ==========================================
+// 13B. AIRDROP RADAR & NEARBY SCANNER SYSTEM
+// ==========================================
+
+let activeAirDropTargetPeer = null;
+
+function getDeviceIconSvg(deviceType) {
+  switch (deviceType) {
+    case 'iphone':
+    case 'mobile':
+      return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="5" y="2" width="14" height="20" rx="3" ry="3"></rect><line x1="12" y1="18" x2="12.01" y2="18"></line></svg>`;
+    case 'ipad':
+      return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="2" width="18" height="20" rx="2" ry="2"></rect><circle cx="12" cy="18" r="1"></circle></svg>`;
+    case 'pc':
+      return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect><line x1="8" y1="21" x2="16" y2="21"></line><line x1="12" y1="17" x2="12" y2="21"></line></svg>`;
+    case 'mac':
+    default:
+      return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="12" rx="2" ry="2"></rect><path d="M2 18h20a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2z"></path></svg>`;
+  }
+}
+
+function updateRadarUI() {
+  const container = document.getElementById('radarPeersContainer');
+  const emptyState = document.getElementById('radarEmptyState');
+  const statusText = document.getElementById('radarStatusText');
+  const activeRoomEl = document.getElementById('radarActiveRoomDisplay');
+  const emptyCodeEl = document.getElementById('radarEmptyCode');
+  const radarBadge = document.getElementById('radarPeerCountBadge');
+  const sideBadge = document.getElementById('sideRadarPeerCount');
+
+  // Top-Left Current Identity Anchor
+  const identityNameEl = document.getElementById('finderIdentityName');
+  const identityAvatarImg = document.getElementById('finderIdentityAvatarImg');
+  const identityPlaceholder = document.getElementById('finderIdentityPlaceholder');
+
+  if (activeRoomEl) activeRoomEl.textContent = STATE.roomCode;
+
+  if (identityNameEl) {
+    identityNameEl.textContent = `${STATE.username} (${STATE.deviceName || 'Mac'})`;
+  }
+  if (STATE.avatar) {
+    if (identityAvatarImg) {
+      identityAvatarImg.src = STATE.avatar;
+      identityAvatarImg.style.display = 'block';
+    }
+    if (identityPlaceholder) identityPlaceholder.style.display = 'none';
+  } else {
+    if (identityAvatarImg) identityAvatarImg.style.display = 'none';
+    if (identityPlaceholder) {
+      identityPlaceholder.style.display = 'flex';
+      identityPlaceholder.textContent = (STATE.username || 'ME').substring(0, 2).toUpperCase();
+    }
+  }
+
+  const validPeers = Array.from(STATE.knownPeers.values()).filter(p => p.peerId !== STATE.myPeerId);
+  const count = validPeers.length;
+
+  if (radarBadge) radarBadge.textContent = count;
+  if (sideBadge) sideBadge.textContent = count;
+
+  if (count === 0) {
+    if (emptyState) emptyState.style.display = 'flex';
+    if (statusText) statusText.textContent = `Scanning for nearby devices...`;
+    if (container) container.innerHTML = '';
+    return;
+  }
+
+  if (emptyState) emptyState.style.display = 'none';
+  if (statusText) statusText.textContent = `Found ${count} nearby device${count > 1 ? 's' : ''}`;
+  if (!container) return;
+
+  container.innerHTML = '';
+  const stage = document.getElementById('radarStage');
+  const rect = stage ? stage.getBoundingClientRect() : { width: 600, height: 600 };
+  const centerX = rect.width / 2;
+  const centerY = rect.height / 2;
+
+  validPeers.forEach((peer, index) => {
+    const total = validPeers.length;
+    const angle = (index / total) * 2 * Math.PI - (Math.PI / 2);
+    const radius = total <= 4 ? 175 : (index % 2 === 0 ? 155 : 235);
+
+    const x = centerX + radius * Math.cos(angle);
+    const y = centerY + radius * Math.sin(angle);
+
+    const isPending = STATE.pendingConnectionRequests.has(peer.peerId);
+    const isConnected = !!peer.isConnected;
+
+    const node = document.createElement('div');
+    node.className = `radar-peer-node floating${isPending ? ' pending-connect' : ''}${isConnected ? ' connected-peer' : ''}`;
+    node.setAttribute('data-peer-id', peer.peerId);
+    node.style.left = `${x}px`;
+    node.style.top = `${y}px`;
+
+    // Desynchronized anti-gravity float timing
+    const animDelay = -(((index * 1.7) + 0.3) % 5).toFixed(1);
+    const animDuration = (5.2 + (index % 3) * 0.7).toFixed(1);
+    node.style.animationDelay = `${animDelay}s`;
+    node.style.animationDuration = `${animDuration}s`;
+
+    node.title = isConnected
+      ? `Connected with ${peer.username}. Click to open chat.`
+      : (isPending ? `Connection request sent. Waiting for response...` : `Click to connect with ${peer.username}`);
+
+    let statusSubtext = escapeHtml(peer.deviceName || 'Apple Device');
+    if (isConnected) {
+      statusSubtext = `<span style="color: var(--apple-green); font-weight: 600;">Connected • Chat</span>`;
+    } else if (isPending) {
+      statusSubtext = `<span style="color: #FFB300; font-weight: 600;">Waiting to accept...</span>`;
+    }
+
+    node.innerHTML = `
+      <div class="radar-peer-card">
+        ${isPending ? '<div class="pending-orbit-ring"></div>' : ''}
+        <div class="radar-peer-avatar">
+          ${peer.avatar
+            ? `<img src="${escapeHtml(peer.avatar)}" alt="${escapeHtml(peer.username)}">`
+            : `<span>${escapeHtml((peer.username || 'T').substring(0, 2).toUpperCase())}</span>`
+          }
+        </div>
+        <div class="radar-peer-device-badge">
+          ${getDeviceIconSvg(peer.deviceType)}
+        </div>
+      </div>
+      <div class="radar-peer-label-box">
+        <span class="radar-peer-name">${escapeHtml(peer.username || 'Teammate')}</span>
+        <span class="radar-peer-device-name">${statusSubtext}</span>
+      </div>
+    `;
+
+    // Click to connect or open chat
+    node.onclick = () => {
+      handleRadarPeerClick(peer);
+    };
+
+    container.appendChild(node);
+  });
+}
+
+function handleRadarPeerClick(peer) {
+  if (!peer) return;
+
+  // 1. If already connected, open direct chat immediately
+  if (peer.isConnected) {
+    switchActiveChat({
+      type: 'dm',
+      id: peer.peerId,
+      name: peer.username || 'Teammate',
+      color: peer.groupColor || '#6C63FF'
+    });
+    setAppMode('chat');
+    return;
+  }
+
+  // 2. If connection request is already pending
+  if (STATE.pendingConnectionRequests.has(peer.peerId)) {
+    showToast(`Waiting for ${peer.username} to accept your request...`, '⏳');
+    return;
+  }
+
+  // 3. Otherwise send two-way connection handshake request
+  sendConnectionRequest(peer);
+}
+
+function sendConnectionRequest(targetPeer) {
+  const requestId = 'req_' + Date.now() + '_' + Math.random().toString(36).substr(2, 6);
+  STATE.pendingConnectionRequests.set(targetPeer.peerId, {
+    requestId,
+    targetPeer,
+    sentAt: Date.now()
+  });
+
+  broadcastRoomPacket({
+    type: 'connect-request',
+    requestId,
+    targetPeerId: targetPeer.peerId,
+    targetPeerJsId: targetPeer.peerJsId,
+    senderPeerId: STATE.myPeerId,
+    peerJsId: STATE.myPeerJsId,
+    username: STATE.username,
+    avatar: STATE.avatar,
+    deviceType: STATE.deviceType,
+    deviceName: STATE.deviceName,
+    groupColor: (STATE.groups[0] && STATE.groups[0].color) || '#6C63FF'
+  });
+
+  updateRadarUI();
+  showToast(`Connection request sent to ${targetPeer.username}...`, '📡');
+
+  // Auto-timeout after 35s
+  setTimeout(() => {
+    if (STATE.pendingConnectionRequests.has(targetPeer.peerId)) {
+      STATE.pendingConnectionRequests.delete(targetPeer.peerId);
+      updateRadarUI();
+    }
+  }, 35000);
+}
+
+let currentIncomingRequest = null;
+
+function showConnectionRequestModal(packet) {
+  currentIncomingRequest = packet;
+  const modal = document.getElementById('connectionRequestModal');
+  const titleEl = document.getElementById('connectPromptTitle');
+  const deviceEl = document.getElementById('connectPromptDevice');
+  const descEl = document.getElementById('connectPromptDesc');
+  const avatarImg = document.getElementById('connectPromptAvatar');
+  const avatarPh = document.getElementById('connectPromptPlaceholder');
+
+  if (titleEl) titleEl.textContent = `${packet.username || 'Nearby Device'} wants to connect`;
+  if (deviceEl) deviceEl.textContent = packet.deviceName || (packet.deviceType === 'mac' ? 'MacBook Pro' : 'Apple Device');
+  if (descEl) descEl.textContent = `Accepting will open a direct secure channel for chatting and instant file drops.`;
+
+  if (packet.avatar) {
+    if (avatarImg) {
+      avatarImg.src = packet.avatar;
+      avatarImg.style.display = 'block';
+    }
+    if (avatarPh) avatarPh.style.display = 'none';
+  } else {
+    if (avatarImg) avatarImg.style.display = 'none';
+    if (avatarPh) {
+      avatarPh.style.display = 'flex';
+      avatarPh.textContent = (packet.username || 'ME').substring(0, 2).toUpperCase();
+    }
+  }
+
+  playReceivedSound();
+  modal?.classList.add('open');
+
+  // If window is minimized or tab is in background, trigger native macOS browser notification
+  if (document.hidden) {
+    triggerDesktopNotification(
+      `${packet.username || 'Nearby Device'} wants to connect`,
+      'Click to open DeskDrop and respond to connection request',
+      packet.avatar
+    );
+  }
+}
+
+function setupConnectionModalHandlers() {
+  const modal = document.getElementById('connectionRequestModal');
+  const btnAccept = document.getElementById('btnAcceptConnect');
+  const btnDecline = document.getElementById('btnDeclineConnect');
+
+  btnAccept?.addEventListener('click', () => {
+    if (!currentIncomingRequest) return;
+    const req = currentIncomingRequest;
+    modal?.classList.remove('open');
+
+    // Trigger electric blue ripple on peer node if on canvas
+    const peerNode = document.querySelector(`.radar-peer-node[data-peer-id="${req.senderPeerId}"]`);
+    if (peerNode) {
+      const wave = document.createElement('div');
+      wave.className = 'electric-ripple-wave';
+      peerNode.appendChild(wave);
+    }
+
+    // 1. Send accept packet
+    broadcastRoomPacket({
+      type: 'connect-accepted',
+      requestId: req.requestId,
+      targetPeerId: req.senderPeerId,
+      senderPeerId: STATE.myPeerId,
+      peerJsId: STATE.myPeerJsId,
+      username: STATE.username,
+      avatar: STATE.avatar,
+      deviceType: STATE.deviceType,
+      deviceName: STATE.deviceName,
+      groupColor: (STATE.groups[0] && STATE.groups[0].color) || '#6C63FF'
+    });
+
+    // 2. Mark peer as connected
+    let peer = STATE.knownPeers.get(req.senderPeerId);
+    if (!peer) {
+      peer = {
+        peerId: req.senderPeerId,
+        peerJsId: req.peerJsId || req.senderPeerId,
+        username: req.username || 'Nearby Device',
+        avatar: req.avatar || '',
+        deviceType: req.deviceType || 'mac',
+        deviceName: req.deviceName || 'Apple Device',
+        groupName: 'Direct Message',
+        groupColor: req.groupColor || '#6C63FF',
+        status: 'online',
+        lastSeen: Date.now(),
+        isNearby: true
+      };
+      STATE.knownPeers.set(req.senderPeerId, peer);
+    }
+    peer.isConnected = true;
+
+    // 3. Connect via WebRTC if possible
+    if (req.peerJsId && STATE.peer) {
+      connectToPeer(req.peerJsId);
+    }
+
+    // 4. Open DM chat and switch to chat mode
+    switchActiveChat({
+      type: 'dm',
+      id: req.senderPeerId,
+      name: req.username || 'Teammate',
+      color: req.groupColor || '#6C63FF'
+    });
+    setAppMode('chat');
+
+    showToast(`Connected with ${req.username}! You can now chat and share files.`, '🤝');
+    playSentSound();
+    updateRadarUI();
+    updatePeersUI();
+    currentIncomingRequest = null;
+  });
+
+  btnDecline?.addEventListener('click', () => {
+    if (!currentIncomingRequest) return;
+    const req = currentIncomingRequest;
+    modal?.classList.remove('open');
+
+    broadcastRoomPacket({
+      type: 'connect-declined',
+      requestId: req.requestId,
+      targetPeerId: req.senderPeerId,
+      senderPeerId: STATE.myPeerId,
+      username: STATE.username
+    });
+
+    showToast(`Declined connection request from ${req.username}`, '✕');
+    currentIncomingRequest = null;
+  });
+}
+
+async function sendAirDropFile(targetPeer, file) {
+  const transferId = 'ad_' + Date.now() + '_' + Math.random().toString(36).substr(2, 6);
+  const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
+
+  showToast(`AirDropping "${file.name}" to ${targetPeer.username}...`, '📡');
+
+  const fileMeta = {
+    type: 'file-start',
+    isAirDrop: true,
+    transferId,
+    name: file.name,
+    size: file.size,
+    mimeType: file.type || 'application/octet-stream',
+    totalChunks,
+    senderName: STATE.username,
+    senderAvatar: STATE.avatar,
+    senderDevice: STATE.deviceName,
+    targetType: 'dm',
+    targetId: targetPeer.peerId,
+    timestamp: Date.now()
+  };
+
+  // Broadcast start packet
+  broadcastRoomPacket(fileMeta);
+
+  // Stream 64KB chunks
+  let offset = 0;
+  let chunkIndex = 0;
+
+  while (offset < file.size) {
+    const slice = file.slice(offset, offset + CHUNK_SIZE);
+    const arrayBuffer = await slice.arrayBuffer();
+
+    const chunkPacket = {
+      type: 'file-chunk',
+      isAirDrop: true,
+      transferId,
+      chunkIndex,
+      data: arrayBuffer
+    };
+
+    // Send chunk
+    const conn = STATE.connections.get(targetPeer.peerJsId) || STATE.connections.get(targetPeer.peerId);
+    if (conn && conn.open) {
+      sendPayload(conn, chunkPacket);
+    } else {
+      broadcastRoomPacket(chunkPacket);
+    }
+
+    offset += CHUNK_SIZE;
+    chunkIndex++;
+
+    if (chunkIndex % 3 === 0) {
+      await new Promise(r => setTimeout(r, 10));
+    }
+  }
+
+  const endPacket = {
+    type: 'file-end',
+    isAirDrop: true,
+    transferId
+  };
+
+  const conn = STATE.connections.get(targetPeer.peerJsId) || STATE.connections.get(targetPeer.peerId);
+  if (conn && conn.open) {
+    sendPayload(conn, endPacket);
+  } else {
+    broadcastRoomPacket(endPacket);
+  }
+
+  playTransferSound();
+  showToast(`AirDrop completed: "${file.name}" sent!`, '✅');
+}
+
+function showAirDropAcceptSheet(packet, onAccept, onDecline) {
+  const modal = document.getElementById('airdropAcceptModal');
+  const title = document.getElementById('airdropPromptTitle');
+  const desc = document.getElementById('airdropPromptDesc');
+  const btnAccept = document.getElementById('btnAcceptAirDrop');
+  const btnDecline = document.getElementById('btnDeclineAirDrop');
+
+  if (!modal) {
+    onAccept();
+    return;
+  }
+
+  if (title) title.textContent = `AirDrop from ${packet.senderName || 'Nearby Device'}`;
+  if (desc) desc.innerHTML = `Would you like to receive <b>"${escapeHtml(packet.name)}"</b> (${formatBytes(packet.size)})?`;
+
+  modal.classList.add('open');
+  playReceivedSound();
+
+  const handleAccept = () => {
+    modal.classList.remove('open');
+    cleanup();
+    onAccept();
+  };
+
+  const handleDecline = () => {
+    modal.classList.remove('open');
+    cleanup();
+    onDecline();
+  };
+
+  const cleanup = () => {
+    btnAccept?.removeEventListener('click', handleAccept);
+    btnDecline?.removeEventListener('click', handleDecline);
+  };
+
+  btnAccept?.addEventListener('click', handleAccept);
+  btnDecline?.addEventListener('click', handleDecline);
+}
+
+function setAppMode(mode) {
+  STATE.activeAppMode = mode;
+  const radarView = document.getElementById('airdropRadarArea');
+  const chatView = document.getElementById('mainChatArea');
+  const btnSideRadar = document.getElementById('btnSideAirDrop');
+  const btnSideChat = document.getElementById('btnSideChat');
+
+  if (mode === 'radar') {
+    if (radarView) radarView.style.display = 'flex';
+    if (chatView) chatView.style.display = 'none';
+    btnSideRadar?.classList.add('active');
+    btnSideChat?.classList.remove('active');
+    updateRadarUI();
+  } else {
+    if (radarView) radarView.style.display = 'none';
+    if (chatView) chatView.style.display = 'flex';
+    btnSideRadar?.classList.remove('active');
+    btnSideChat?.classList.add('active');
+  }
+}
+
+function triggerNativeMacAirDrop() {
+  const fileInput = document.getElementById('nativeShareFileInput');
+  if (!fileInput) return;
+  fileInput.value = '';
+  fileInput.onchange = () => {
+    if (fileInput.files && fileInput.files.length > 0) {
+      const files = Array.from(fileInput.files);
+      if (navigator.share && navigator.canShare && navigator.canShare({ files })) {
+        navigator.share({
+          files: files,
+          title: files[0].name,
+          text: 'Shared via DeskDrop'
+        }).then(() => {
+          showToast('macOS AirDrop share completed!', '🍏');
+        }).catch((err) => {
+          if (err.name !== 'AbortError') {
+            console.debug('Share err:', err);
+          }
+        });
+      } else {
+        showToast('Native share not supported on this browser context', 'ℹ️');
+      }
+    }
+  };
+  fileInput.click();
+}
+
+function openRoomCodeModal() {
+  const modal = document.getElementById('roomCodeModal');
+  const input = document.getElementById('inputCustomRoomCode');
+  if (modal && input) {
+    input.value = STATE.roomCode;
+    modal.classList.add('open');
+    setTimeout(() => input.focus(), 60);
+  }
+}
+
+function applyCustomRoomCode(newCode) {
+  const clean = sanitizeRoomCode(newCode).toUpperCase();
+  if (!clean) return;
+  initPeerSession(clean);
+  showToast(`Connected to room ${clean}. Scanning nearby...`, '📡');
+  document.getElementById('roomCodeModal')?.classList.remove('open');
+}
+
+function copyInviteRoomLink() {
+  const url = `${window.location.origin}${window.location.pathname}?room=${STATE.roomCode}`;
+  navigator.clipboard.writeText(url).then(() => {
+    showToast(`Invite link for room ${STATE.roomCode} copied!`, '📋');
+  });
+}
+
+// ==========================================
 // 14. EVENT HANDLERS & MODAL MANAGEMENT
 // ==========================================
 
 function setupEventHandlers() {
+  // AirDrop Mode Switching (Radar vs Chat)
+  document.getElementById('btnSideAirDrop')?.addEventListener('click', () => setAppMode('radar'));
+  document.getElementById('btnSideChat')?.addEventListener('click', () => setAppMode('chat'));
+
+  // AirDrop Discoverability Toggles
+  document.getElementById('btnVisDiscoverable')?.addEventListener('click', () => setDiscoverabilityMode('discoverable'));
+  document.getElementById('btnVisInvisible')?.addEventListener('click', () => setDiscoverabilityMode('invisible'));
+
+  // Synchronize initial visibility buttons UI
+  if (STATE.visibilityMode === 'invisible') {
+    document.getElementById('btnVisInvisible')?.classList.add('active');
+    document.getElementById('btnVisDiscoverable')?.classList.remove('active');
+  } else {
+    document.getElementById('btnVisDiscoverable')?.classList.add('active');
+    document.getElementById('btnVisInvisible')?.classList.remove('active');
+  }
+
+  // Connection Handshake Modal Handlers
+  setupConnectionModalHandlers();
+
+  // Native macOS AirDrop Trigger
+  document.getElementById('btnTitlebarNativeAirDrop')?.addEventListener('click', triggerNativeMacAirDrop);
+  document.getElementById('btnFooterNativeAirDrop')?.addEventListener('click', triggerNativeMacAirDrop);
+
+  // Radar Toolbar Actions
+  document.getElementById('btnRadarChangeCode')?.addEventListener('click', openRoomCodeModal);
+  document.getElementById('btnRadarCopyLink')?.addEventListener('click', copyInviteRoomLink);
+  document.getElementById('btnRadarInviteFriends')?.addEventListener('click', copyInviteRoomLink);
+
+  // Room Code Modal Handlers
+  document.getElementById('btnCloseRoomCodeModal')?.addEventListener('click', () => {
+    document.getElementById('roomCodeModal')?.classList.remove('open');
+  });
+  document.getElementById('roomCodeModal')?.addEventListener('click', (e) => {
+    if (e.target.id === 'roomCodeModal') {
+      document.getElementById('roomCodeModal')?.classList.remove('open');
+    }
+  });
+  document.getElementById('btnGenerateRandomCode')?.addEventListener('click', () => {
+    const input = document.getElementById('inputCustomRoomCode');
+    if (input) input.value = generateRoomCode();
+  });
+  document.getElementById('btnApplyRoomCode')?.addEventListener('click', () => {
+    const input = document.getElementById('inputCustomRoomCode');
+    if (input && input.value) applyCustomRoomCode(input.value);
+  });
+  document.getElementById('inputCustomRoomCode')?.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      const input = document.getElementById('inputCustomRoomCode');
+      if (input && input.value) applyCustomRoomCode(input.value);
+    }
+  });
+
+  // Target Peer AirDrop File Input
+  document.getElementById('airdropTargetFileInput')?.addEventListener('change', (e) => {
+    const input = e.target;
+    if (input.files && input.files.length > 0 && activeAirDropTargetPeer) {
+      Array.from(input.files).forEach(f => sendAirDropFile(activeAirDropTargetPeer, f));
+    }
+  });
+
   // Offline & Online detection
   window.addEventListener('online', () => {
     showToast('Internet reconnected • WebRTC Active', '🌐');
@@ -2128,7 +2970,7 @@ function setupEventHandlers() {
   document.getElementById('btnSettingsNewRoom')?.addEventListener('click', () => {
     const newCode = generateRoomCode();
     document.getElementById('sheetRoomCodeSub').textContent = `Active Room: ${newCode}`;
-    initPeerSession(newCode, 0);
+    initPeerSession(newCode);
   });
 
   setupAccordion('itemCreatorInfo', 'expandCreatorBox');
@@ -2221,7 +3063,7 @@ function setupEventHandlers() {
     updateGroupsUI();
     updateLocalProfileUI();
     switchActiveChat({ type: 'group', id: newGroup.id, name: newGroup.name, color: newGroup.color, code: newGroup.code });
-    initPeerSession(code, 0);
+    initPeerSession(code);
     return newGroup;
   }
 
@@ -2244,7 +3086,7 @@ function setupEventHandlers() {
     }
 
     switchActiveChat({ type: 'group', id: group.id, name: group.name, color: group.color, code: group.code });
-    initPeerSession(code, 0);
+    initPeerSession(code);
     showToast(`Joined group ${code}!`, '⚡️');
     return group;
   }
@@ -2824,57 +3666,16 @@ function initOnboardingWizard() {
     goToStep(4);
   });
 
-  // Step 4: Create or Join Group
-  let selectedOnboardingColor = GROUP_ACCENT_COLORS[0].hex;
-  function initOnboardingSwatches() {
-    const container = document.getElementById('onboardingColorSwatches');
-    if (!container || container.children.length > 0) return;
-    GROUP_ACCENT_COLORS.forEach((c, idx) => {
-      const sw = document.createElement('button');
-      sw.className = `swatch-btn ${idx === 0 ? 'selected' : ''}`;
-      sw.style.backgroundColor = c.hex;
-      sw.onclick = () => {
-        container.querySelectorAll('.swatch-btn').forEach(b => b.classList.remove('selected'));
-        sw.classList.add('selected');
-        selectedOnboardingColor = c.hex;
-      };
-      container.appendChild(sw);
-    });
+  // Step 4: Discover People (AirDrop Radar)
+  const cbDiscoverable = document.getElementById('onboardingDiscoverableCheck');
+  if (cbDiscoverable) {
+    cbDiscoverable.checked = (STATE.visibilityMode !== 'invisible');
   }
 
-  const tabCreate = document.getElementById('onboardingTabCreate');
-  const tabJoin = document.getElementById('onboardingTabJoin');
-  const paneCreate = document.getElementById('onboardingCreateGroupPane');
-  const paneJoin = document.getElementById('onboardingJoinGroupPane');
-
-  tabCreate?.addEventListener('click', () => {
-    tabCreate.classList.add('active');
-    tabJoin.classList.remove('active');
-    if (paneCreate) paneCreate.style.display = 'block';
-    if (paneJoin) paneJoin.style.display = 'none';
-  });
-
-  tabJoin?.addEventListener('click', () => {
-    tabJoin.classList.add('active');
-    tabCreate.classList.remove('active');
-    if (paneCreate) paneCreate.style.display = 'none';
-    if (paneJoin) paneJoin.style.display = 'block';
-  });
-
   document.getElementById('btnOnboardingNext4')?.addEventListener('click', () => {
-    const isCreating = tabCreate && tabCreate.classList.contains('active');
-    if (isCreating) {
-      const groupNameInput = document.getElementById('onboardingGroupNameInput');
-      const groupName = groupNameInput?.value.trim();
-      if (groupName) {
-        createNewGroup(groupName, selectedOnboardingColor);
-      }
-    } else {
-      const joinInput = document.getElementById('onboardingJoinCodeInput');
-      const code = sanitizeRoomCode(joinInput?.value);
-      if (code) {
-        joinGroupByCode(code);
-      }
+    const cb = document.getElementById('onboardingDiscoverableCheck');
+    if (cb) {
+      setDiscoverabilityMode(cb.checked ? 'discoverable' : 'invisible');
     }
     goToStep(5);
   });
@@ -2922,7 +3723,7 @@ function initOnboardingWizard() {
 // 16. APPLICATION BOOTSTRAP
 // ==========================================
 
-function initApp() {
+async function initApp() {
   updateLocalProfileUI();
   updateGroupsUI();
   applyWallpaperStyles();
@@ -2930,6 +3731,9 @@ function initApp() {
   renderEmojiGrid('all');
   setupEventHandlers();
   initOnboardingWizard();
+
+  // Fetch local subnet hash for zero-config same Wi-Fi clustering
+  await fetchNetworkSubnetHash();
 
   const sliderOpacity = document.getElementById('sliderWallpaperOpacity');
   const sliderBlur = document.getElementById('sliderWallpaperBlur');
@@ -2946,13 +3750,33 @@ function initApp() {
       ? STATE.activeChat.code
       : (STATE.roomCode || 'DD-ROOM');
     switchActiveChat(STATE.activeChat);
-    initPeerSession(activeRoom, 0);
+    initPeerSession(activeRoom);
   }
 
-  // Periodic beacon for 100% offline local Wi-Fi / subnet mesh presence
+  // Open in AirDrop Radar mode so looking for nearby devices starts immediately
+  setAppMode('radar');
+
+  // Frequent presence beacon & liveness monitor (every 3.5s)
   setInterval(() => {
+    broadcastPresenceBeacon();
     announceLocalPresence();
-  }, 4000);
+
+    // Prune stale peers that have departed (no beacon for > 12s)
+    const now = Date.now();
+    let changed = false;
+    for (const [peerId, peer] of STATE.knownPeers.entries()) {
+      if (now - (peer.lastSeen || now) > 12000) {
+        STATE.knownPeers.delete(peerId);
+        STATE.connections.delete(peerId);
+        if (peer.peerJsId) STATE.connections.delete(peer.peerJsId);
+        changed = true;
+      }
+    }
+    if (changed) {
+      updatePeersUI();
+      updateRadarUI();
+    }
+  }, 3500);
 
   if ('serviceWorker' in navigator) {
     window.addEventListener('load', () => {
